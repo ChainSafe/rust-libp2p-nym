@@ -1,8 +1,17 @@
 [package]
-name = "rust-template"
+name = "rust-libp2p-nym"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1.0"
+futures = "0.3.26"
+libp2p-core = { version = "0.38.0" }
+nym-websocket = { package = "websocket-requests", git = "https://github.com/nymtech/nym", tag = "v1.0.1" }
+nymsphinx = { package = "nymsphinx", git = "https://github.com/nymtech/nym", tag = "v1.0.1" }
+thiserror = "1.0"
+tokio = { version = "1.24", features = [ "full" ] }
+tokio-tungstenite = "0.14"
+tracing = "0.1.23"
