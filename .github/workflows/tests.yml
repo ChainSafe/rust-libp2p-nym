@@ -12,6 +12,16 @@ jobs:
       run: rustup toolchain install stable
     - name: Install protoc
       run: sudo apt-get install protobuf-compiler
+    - name: Clone Nym
+      uses: actions/checkout@v2
+      with:
+        repository: https://github.com/nymtech/nym
+        path: './nym'
+    - name: Build and run Nym
+      run: | 
+        cd nym && cargo build --release
+        ./target/release/nym-client init --id test
+        ./target/release/nym-client run --id test &
     - name: Build
       run: cargo build --all
     - name: Run tests
