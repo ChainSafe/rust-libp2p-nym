@@ -15,7 +15,7 @@ jobs:
     - name: Clone Nym
       uses: actions/checkout@v2
       with:
-        repository: https://github.com/nymtech/nym
+        repository: nymtech/nym
         path: './nym'
     - name: Build and run Nym
       run: | 
