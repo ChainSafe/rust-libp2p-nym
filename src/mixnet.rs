@@ -78,7 +78,6 @@ impl Mixnet {
             let data = parse_message_data(&msg_bytes.message).map_err(|e| anyhow!(e))?;
             self.inbound_tx.send(data).map_err(|e| anyhow!(e))?;
             debug!("put inbound msg into channel");
-            // TODO: I think this loop goes forever, it should probably return after the first good msg
             return Ok(());
         }
         Ok(())
@@ -150,35 +149,29 @@ fn parse_nym_message(msg: Message) -> Result<ServerResponse, Error> {
 
 #[cfg(test)]
 mod test {
-    use crate::message::Message;
+    use crate::message::{self, Message};
     use crate::mixnet::Mixnet;
-    use tracing_subscriber::EnvFilter;
-
-    // #[tokio::test]
-    // async fn test_mixnet_get_self_address() {
-    //     tracing_subscriber::fmt()
-    //     .with_env_filter(
-    //         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
-    //     )
-    //     .init();
-
-    //     let uri = "ws://localhost:1977".to_string();
-    //     let (mut mixnet, _, _) = Mixnet::new(&uri).await.unwrap();
-    //     mixnet.get_self_address().await.unwrap();
-    //     mixnet.close().await;
-    // }
+    use std::thread;
 
     #[tokio::test]
-    async fn test_mixnet_poll_inbound() {
+    async fn test_mixnet_poll_inbound_and_outbound() {
         let uri = "ws://localhost:1977".to_string();
-        let (mut mixnet, inbound_rx, _) = Mixnet::new(&uri).await.unwrap();
+        let (mut mixnet, inbound_rx, outbound_tx) = Mixnet::new(&uri).await.unwrap();
         let self_address = mixnet.get_self_address().await.unwrap();
         let msg_inner = "hello".as_bytes();
         let msg = Message::Message(msg_inner.to_vec());
-        mixnet
-            .write_bytes(self_address, &msg.to_bytes())
-            .await
-            .unwrap();
+
+        // send a message to ourselves through the mixnet
+        let out_msg = message::OutboundMessage {
+            message: msg,
+            recipient: self_address,
+        };
+        thread::spawn(move || {
+            outbound_tx.send(out_msg).unwrap();
+        });
+        mixnet.poll_outbound().await.unwrap();
+
+        // receive the message from ourselves over the mixnet
         mixnet.poll_inbound().await.unwrap();
         let received_msg = inbound_rx.recv().unwrap();
         if let Message::Message(recv_msg) = received_msg.0 {
@@ -186,6 +179,6 @@ mod test {
         } else {
             panic!("expected Message::Message")
         }
-        mixnet.close().await;
+        mixnet.close().await.unwrap();
     }
 }
