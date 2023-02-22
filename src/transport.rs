@@ -17,19 +17,24 @@ use std::{
 use tracing::debug;
 
 use crate::error::NymTransportError;
-use crate::message::{InboundMessage, OutboundMessage};
+use crate::message::{InboundMessage, Message, OutboundMessage};
 use crate::mixnet::Mixnet;
 
 pub struct Listener {
     id: ListenerId,
+    listen_addr: Multiaddr,
 
     // receives inbound mixnet messages
     inbound_rx: Receiver<InboundMessage>,
 }
 
 impl Listener {
-    fn new(id: ListenerId, inbound_rx: Receiver<InboundMessage>) -> Self {
-        Self { id, inbound_rx }
+    fn new(id: ListenerId, listen_addr: Multiaddr, inbound_rx: Receiver<InboundMessage>) -> Self {
+        Self {
+            id,
+            listen_addr,
+            inbound_rx,
+        }
     }
 
     fn close(&self) {
@@ -42,8 +47,21 @@ impl Stream for Listener {
 
     /// poll_next should return any inbound messages on the listener.
     fn poll_next(self: Pin<&mut Self>, _ctx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // TODO: poll self.inbound_rx
-        // and maybe emit TransportEvent::Incoming
+        // poll self.inbound_rx and emit TransportEvent::Incoming if we get Message::ConnectionRequest
+        if let Ok(msg) = self.inbound_rx.recv() {
+            return match msg.0 {
+                Message::ConnectionRequest(data) => {
+                    return Poll::Ready(Some(TransportEvent::Incoming {
+                        listener_id: self.id,
+                        upgrade: Upgrade::new(),
+                        local_addr: self.listen_addr.clone(),
+                        send_back_addr: self.listen_addr.clone(),
+                    }))
+                }
+                _ => Poll::Pending, // TODO: this case shouldn't happen; split out InboundMessage variants?
+            };
+        }
+
         Poll::Pending
     }
 }
@@ -51,9 +69,19 @@ impl Stream for Listener {
 /// NymTransport implements the Transport trait using the Nym mixnet.
 pub struct NymTransport {
     self_address: Recipient,
+
+    // all inbound messages
+    inbound_rx: Receiver<InboundMessage>,
+    // inbound connection requests only; using for sending to Listener.poll()
+    inbound_req_tx: Sender<InboundMessage>,
+    // outbound messages
     outbound_tx: Sender<OutboundMessage>,
+
     listeners: SelectAll<Listener>,
+
+    // inbound messages for Transport.poll()
     poll_rx: Receiver<TransportEvent<Upgrade, NymTransportError>>,
+    // outbound messages to Transport.poll()
     poll_tx: Sender<TransportEvent<Upgrade, NymTransportError>>,
 }
 
@@ -64,18 +92,25 @@ impl NymTransport {
 
         let (mut mixnet, inbound_rx, outbound_tx) = Mixnet::new(uri).await?;
         let self_address = mixnet.get_self_address().await?;
+        let listen_addr =
+            Multiaddr::from_str(&format!("/nym/{:?}", self_address)).map_err(|e| anyhow!(e))?;
+
+        let (inbound_req_tx, inbound_req_rx): (Sender<InboundMessage>, Receiver<InboundMessage>) =
+            mpsc::channel();
 
         let mut listeners = SelectAll::<Listener>::new();
         let listener_id = ListenerId::new();
-        listeners.push(Listener::new(listener_id, inbound_rx));
+        listeners.push(Listener::new(
+            listener_id,
+            listen_addr.clone(),
+            inbound_req_rx,
+        ));
 
         let (poll_tx, poll_rx): (
             Sender<TransportEvent<Upgrade, NymTransportError>>,
             Receiver<TransportEvent<Upgrade, NymTransportError>>,
         ) = mpsc::channel();
 
-        let listen_addr =
-            Multiaddr::from_str(&format!("/nym/{:?}", self_address)).map_err(|e| anyhow!(e))?;
         poll_tx
             .send(TransportEvent::NewAddress {
                 listener_id,
@@ -85,11 +120,29 @@ impl NymTransport {
 
         Ok(Self {
             self_address,
+            inbound_rx,
+            inbound_req_tx,
             outbound_tx,
             listeners,
             poll_rx,
             poll_tx,
         })
+    }
+
+    fn poll_inbound_loop(&self) {
+        loop {
+            if let Ok(msg) = self.inbound_rx.recv() {
+                match &msg.0 {
+                    Message::ConnectionRequest(data) => {
+                        if self.inbound_req_tx.send(msg).is_err() {
+                            debug!("error");
+                        }
+                    }
+                    Message::Message(data) => debug!("todo"), // TODO
+                    Message::Unknown => debug!("received unknown message"),
+                }
+            }
+        }
     }
 }
 
@@ -103,6 +156,12 @@ pub struct Connection {
 /// Upgrade represents a transport upgrade.
 /// Currently unsupported.
 pub struct Upgrade {}
+
+impl Upgrade {
+    fn new() -> Self {
+        Upgrade {}
+    }
+}
 
 impl Future for Upgrade {
     type Output = Result<Connection, NymTransportError>;
