@@ -3,9 +3,12 @@ use nymsphinx::addressing::clients::Recipient;
 
 use crate::transport::Connection;
 
+pub(crate) const SIGNATURE_LENGTH: usize = 64;
+
 /// CONNECTION_MESSAGE_MESSAGE is the message signed in a ConnectionMessage.
 pub(crate) const CONNECTION_MESSAGE_MESSAGE: &str = "NYM_CONNECTION_0";
 
+#[derive(Debug)]
 pub(crate) enum Message {
     ConnectionRequest(ConnectionMessage),
     ConnectionResponse(ConnectionMessage),
@@ -13,6 +16,7 @@ pub(crate) enum Message {
     Unknown,
 }
 
+#[derive(Default, Debug)]
 pub(crate) struct PublicKey(Vec<u8>);
 
 impl PublicKey {
@@ -26,16 +30,18 @@ impl PublicKey {
 }
 
 /// ConnectionMessage is exchanged to open a new connection.
+#[derive(Default, Debug)]
 pub(crate) struct ConnectionMessage {
     public_key: PublicKey,
     signature: Vec<u8>,
 }
 
 /// TransportMessage is sent over a connection after establishment.
+#[derive(Default, Debug)]
 pub(crate) struct TransportMessage {
-    public_key: PublicKey,
-    signature: Vec<u8>,
-    message: Vec<u8>,
+    pub(crate) public_key: PublicKey,
+    pub(crate) signature: Vec<u8>,
+    pub(crate) message: Vec<u8>,
 }
 
 impl From<Vec<u8>> for Message {
@@ -62,7 +68,7 @@ impl ConnectionMessage {
 
     fn from_bytes(bytes: &[u8]) -> Self {
         let public_key = PublicKey::from_bytes(&bytes[0..32]);
-        let signature = bytes[32..96].to_vec();
+        let signature = bytes[32..32 + SIGNATURE_LENGTH].to_vec();
         ConnectionMessage {
             public_key,
             signature,
@@ -80,8 +86,8 @@ impl TransportMessage {
 
     fn from_bytes(bytes: &[u8]) -> Self {
         let public_key = PublicKey::from_bytes(&bytes[0..32]);
-        let signature = bytes[32..96].to_vec();
-        let message = bytes[96..].to_vec();
+        let signature = bytes[32..32 + SIGNATURE_LENGTH].to_vec();
+        let message = bytes[32 + SIGNATURE_LENGTH..].to_vec();
         TransportMessage {
             public_key,
             signature,
@@ -108,8 +114,12 @@ impl Message {
                 bytes.append(&mut msg.to_bytes());
                 bytes
             }
-            Message::Unknown => vec![2], // TODO: should this return None?
+            Message::Unknown => vec![3], // TODO: should this return None?
         }
+    }
+
+    pub(crate) fn verify_signature(&self) -> bool {
+        true
     }
 }
 

@@ -134,20 +134,22 @@ impl NymTransport {
     fn inbound_loop(&self) {
         loop {
             if let Ok(msg) = self.inbound_rx.recv() {
+                if !msg.0.verify_signature() {
+                    debug!("failed to verify message signature: {:?}", msg.0);
+                    continue;
+                }
+
                 match msg.0 {
                     Message::ConnectionRequest(inner) => {
-                        // TODO: verify signature
                         // send to listener channel
                         if self.inbound_req_tx.send(inner).is_err() {
-                            debug!("error");
+                            debug!("failed to send ConnectionRequest to listener channel");
                         }
                     }
                     Message::ConnectionResponse(data) => {
-                        // TODO: verify signature
                         // TODO: resolve connection
                     }
                     Message::TransportMessage(data) => {
-                        // TODO: verify signature
                         // TODO: send to connection channel
                     }
                     Message::Unknown => debug!("received unknown message"),

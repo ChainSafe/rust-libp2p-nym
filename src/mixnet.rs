@@ -149,7 +149,7 @@ fn parse_nym_message(msg: Message) -> Result<ServerResponse, Error> {
 
 #[cfg(test)]
 mod test {
-    use crate::message::{self, Message};
+    use crate::message::{self, Message, PublicKey, TransportMessage, SIGNATURE_LENGTH};
     use crate::mixnet::Mixnet;
     use std::thread;
 
@@ -159,7 +159,11 @@ mod test {
         let (mut mixnet, inbound_rx, outbound_tx) = Mixnet::new(&uri).await.unwrap();
         let self_address = mixnet.get_self_address().await.unwrap();
         let msg_inner = "hello".as_bytes();
-        let msg = Message::Message(msg_inner.to_vec());
+        let msg = Message::TransportMessage(TransportMessage {
+            public_key: PublicKey::default(),
+            signature: vec![0u8; SIGNATURE_LENGTH],
+            message: msg_inner.to_vec(),
+        });
 
         // send a message to ourselves through the mixnet
         let out_msg = message::OutboundMessage {
@@ -174,10 +178,10 @@ mod test {
         // receive the message from ourselves over the mixnet
         mixnet.poll_inbound().await.unwrap();
         let received_msg = inbound_rx.recv().unwrap();
-        if let Message::Message(recv_msg) = received_msg.0 {
-            assert_eq!(msg_inner, recv_msg);
+        if let Message::TransportMessage(recv_msg) = received_msg.0 {
+            assert_eq!(msg_inner, recv_msg.message);
         } else {
-            panic!("expected Message::Message")
+            panic!("expected Message::TransportMessage")
         }
         mixnet.close().await.unwrap();
     }
