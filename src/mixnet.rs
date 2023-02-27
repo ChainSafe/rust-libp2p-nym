@@ -149,7 +149,8 @@ fn parse_nym_message(msg: Message) -> Result<ServerResponse, Error> {
 
 #[cfg(test)]
 mod test {
-    use crate::message::{self, Message, PublicKey, TransportMessage, SIGNATURE_LENGTH};
+    use crate::keys::{FakePublicKey, SIGNATURE_LENGTH};
+    use crate::message::{self, Message, TransportMessage};
     use crate::mixnet::Mixnet;
     use std::thread;
 
@@ -160,7 +161,7 @@ mod test {
         let self_address = mixnet.get_self_address().await.unwrap();
         let msg_inner = "hello".as_bytes();
         let msg = Message::TransportMessage(TransportMessage {
-            public_key: PublicKey::default(),
+            public_key: FakePublicKey::default(),
             signature: vec![0u8; SIGNATURE_LENGTH],
             message: msg_inner.to_vec(),
         });
