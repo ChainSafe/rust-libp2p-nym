@@ -27,7 +27,7 @@ pub(crate) trait PublicKey {
     fn from_bytes(bytes: &[u8]) -> Self;
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Eq, Hash, PartialEq)]
 pub(crate) struct FakePublicKey(Vec<u8>);
 
 impl PublicKey for FakePublicKey {

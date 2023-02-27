@@ -2,7 +2,7 @@ use anyhow::{anyhow, Error};
 use nymsphinx::addressing::clients::Recipient;
 
 use crate::error::NymTransportError;
-use crate::keys::{FakeKeypair, FakePublicKey, Keypair, PublicKey, SIGNATURE_LENGTH};
+use crate::keys::{FakePublicKey, Keypair, PublicKey, SIGNATURE_LENGTH};
 
 const RECIPIENT_LENGTH: usize = Recipient::LEN;
 
@@ -23,7 +23,7 @@ pub(crate) struct ConnectionMessage {
     /// only required if this is a ConnectionRequest.
     pub(crate) recipient: Option<Recipient>,
     pub(crate) public_key: FakePublicKey,
-    signature: Vec<u8>,
+    pub(crate) signature: Vec<u8>,
 }
 
 /// TransportMessage is sent over a connection after establishment.

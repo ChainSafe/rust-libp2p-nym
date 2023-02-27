@@ -14,29 +14,28 @@ use std::{
     pin::Pin,
     str::FromStr,
     task::{Context, Poll},
-    thread,
 };
 use tracing::debug;
 
+use crate::connection::{Connection, InnerConnection, PendingConnection};
 use crate::error::NymTransportError;
 use crate::keys::{FakeKeypair, FakePublicKey, Keypair};
-use crate::message::{ConnectionMessage, InboundMessage, Message, OutboundMessage};
+use crate::message::{
+    ConnectionMessage, InboundMessage, Message, OutboundMessage, CONNECTION_MESSAGE_MESSAGE,
+};
 use crate::mixnet::Mixnet;
 
+/// Listener listens for new inbound connection requests.
 pub struct Listener {
     id: ListenerId,
     listen_addr: Multiaddr,
 
-    // receives inbound ConnectionRequest messages
-    inbound_rx: Receiver<ConnectionMessage>,
+    // receives Upgrades; handling has already been done in handle_inbound
+    inbound_rx: Receiver<Upgrade>,
 }
 
 impl Listener {
-    fn new(
-        id: ListenerId,
-        listen_addr: Multiaddr,
-        inbound_rx: Receiver<ConnectionMessage>,
-    ) -> Self {
+    fn new(id: ListenerId, listen_addr: Multiaddr, inbound_rx: Receiver<Upgrade>) -> Self {
         Self {
             id,
             listen_addr,
@@ -54,16 +53,11 @@ impl Stream for Listener {
 
     /// poll_next should return any inbound messages on the listener.
     fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // poll self.inbound_rx and emit TransportEvent::Incoming if we get a ConnectionRequest
-        if let Ok(msg) = self.inbound_rx.recv() {
-            if msg.recipient.is_none() {
-                debug!("received None recipient in ConnectionRequest: {:?}", msg);
-                return Poll::Pending; // TODO: should this check the channel again?
-            }
-
+        // poll self.inbound_rx and emit TransportEvent::Incoming if we get an Upgrade
+        if let Ok(upgrade) = self.inbound_rx.recv() {
             return Poll::Ready(Some(TransportEvent::Incoming {
                 listener_id: self.id,
-                upgrade: Upgrade::new(msg.recipient.unwrap(), msg.public_key),
+                upgrade: upgrade,
                 local_addr: self.listen_addr.clone(),
                 send_back_addr: self.listen_addr.clone(),
             }));
@@ -75,17 +69,28 @@ impl Stream for Listener {
 
 /// NymTransport implements the Transport trait using the Nym mixnet.
 pub struct NymTransport {
+    // our Nym address
     self_address: Recipient,
 
-    connections: HashMap<FakePublicKey, Connection>,
+    // established connections
+    // map remote_public_key -> InnerConnection
+    connections: HashMap<FakePublicKey, InnerConnection>,
 
+    // outbound pending dials
+    // map local_public_key -> Upgrade
+    // TODO: needs to be remote_recipient -> Upgrade?
     pending_dials: HashMap<FakePublicKey, Upgrade>,
 
-    // all inbound messages
-    // inbound_rx: Receiver<InboundMessage>,
-    // outbound messages
+    // inbound connection requests - sent to Listener::poll()
+    connection_req_tx: Sender<Upgrade>,
+
+    // inbound mixnet messages
+    inbound_rx: Receiver<InboundMessage>,
+
+    // outbound mixnet messages
     outbound_tx: Sender<OutboundMessage>,
 
+    // listeners for inbound connection requests
     listeners: SelectAll<Listener>,
 
     // inbound messages for Transport.poll()
@@ -106,10 +111,8 @@ impl NymTransport {
 
         // inbound connection requests only; used from sending between transport_inbound_loop()
         // and Listener::poll().
-        let (connection_req_tx, connection_req_rx): (
-            Sender<ConnectionMessage>,
-            Receiver<ConnectionMessage>,
-        ) = mpsc::channel();
+        let (connection_req_tx, connection_req_rx): (Sender<Upgrade>, Receiver<Upgrade>) =
+            mpsc::channel();
 
         let mut listeners = SelectAll::<Listener>::new();
         let listener_id = ListenerId::new();
@@ -124,19 +127,23 @@ impl NymTransport {
             Receiver<TransportEvent<Upgrade, NymTransportError>>,
         ) = mpsc::channel();
 
-        poll_tx.send(TransportEvent::NewAddress {
-            listener_id,
-            listen_addr,
-        })?;
+        poll_tx
+            .send(TransportEvent::NewAddress {
+                listener_id,
+                listen_addr,
+            })
+            .unwrap();
 
-        thread::spawn(move || {
-            transport_inbound_loop(inbound_rx, connection_req_tx);
-        });
+        // thread::spawn(move || {
+        //     transport_inbound_loop(inbound_rx, connection_req_tx);
+        // });
 
         Ok(Self {
             self_address,
-            connections: HashMap::<FakePublicKey, Connection>::new(),
+            connections: HashMap::<FakePublicKey, InnerConnection>::new(),
             pending_dials: HashMap::<FakePublicKey, Upgrade>::new(),
+            connection_req_tx,
+            inbound_rx,
             outbound_tx,
             listeners,
             poll_rx,
@@ -144,79 +151,110 @@ impl NymTransport {
         })
     }
 
-    /// handle_incoming handles an incoming connection request, sends back a
-    /// connection response, and finally completes the upgrade into a Connection.
-    fn handle_incoming(&self, upgrade: &Upgrade) {
-        // TODO
-    }
-}
+    // this runs in a thread when the transport is constructed.
+    fn transport_inbound_loop(
+        &mut self,
+        // inbound_rx: Receiver<InboundMessage>,
+        // connection_req_tx: Sender<Upgrade>,
+    ) {
+        loop {
+            // TODO: return if channel closes
+            if let Ok(msg) = self.inbound_rx.recv() {
+                if !msg.0.verify_signature() {
+                    debug!("failed to verify message signature: {:?}", msg.0);
+                    continue;
+                }
 
-// this runs in a thread when the transport is constructed.
-fn transport_inbound_loop(
-    inbound_rx: Receiver<InboundMessage>,
-    connection_req_tx: Sender<ConnectionMessage>,
-) {
-    loop {
-        if let Ok(msg) = inbound_rx.recv() {
-            if !msg.0.verify_signature() {
-                debug!("failed to verify message signature: {:?}", msg.0);
-                continue;
-            }
+                match msg.0 {
+                    Message::ConnectionRequest(inner) => {
+                        match self.handle_incoming_request(inner) {
+                            Ok(conn) => {
+                                let (connection_tx, connection_rx): (
+                                    Sender<Connection>,
+                                    Receiver<Connection>,
+                                ) = mpsc::channel();
+                                let upgrade = Upgrade::new(connection_rx);
+                                // send connection into Upgrade channel
+                                connection_tx.send(conn).unwrap();
 
-            match msg.0 {
-                Message::ConnectionRequest(inner) => {
-                    // send to listener channel
-                    if connection_req_tx.send(inner).is_err() {
-                        debug!("failed to send ConnectionRequest to listener channel");
+                                // send upgrade to listener channel
+                                if self.connection_req_tx.send(upgrade).is_err() {
+                                    debug!("failed to send ConnectionRequest to listener channel");
+                                }
+                            }
+                            Err(e) => {
+                                debug!("failed to handle incoming ConnectionRequest: {:?}", e);
+                                continue;
+                            }
+                        }
+                    }
+                    Message::ConnectionResponse(data) => {
+                        // TODO: resolve connection
+                    }
+                    Message::TransportMessage(data) => {
+                        // TODO: send to connection channel
                     }
                 }
-                Message::ConnectionResponse(data) => {
-                    // TODO: resolve connection
-                }
-                Message::TransportMessage(data) => {
-                    // TODO: send to connection channel
-                }
             }
         }
     }
-}
 
-/// Connection represents the result of a connection setup process.
-#[derive(Debug)]
-pub struct Connection {
-    //remote_id: Recipient,
-    //remote_public_key: FakePublicKey,
-    keypair: FakeKeypair,
-}
-
-impl Connection {
-    pub(crate) fn new(keypair: FakeKeypair) -> Self {
-        Connection {
-            //remote_id: Recipient::default(),
-            keypair,
+    /// handle_incoming_request handles an incoming connection request, sends back a
+    /// connection response, and finally completes the upgrade into a Connection.
+    fn handle_incoming_request(&mut self, msg: ConnectionMessage) -> Result<Connection, Error> {
+        if msg.recipient.is_none() {
+            return Err(anyhow!(
+                "received None recipient in ConnectionRequest: {:?}",
+                msg
+            ));
         }
+
+        let keypair = FakeKeypair::generate();
+
+        // "outer" representation of a connection; this is returned in
+        // Upgrade::poll().
+        // contains channels for applications to read/write to.
+        let conn = Connection::new(
+            msg.recipient.unwrap(),
+            msg.public_key.clone(),
+            keypair.clone(),
+        );
+
+        // "inner" representation of a connection; this is what we
+        // read/write to when receiving messages on the mixnet,
+        // or we get outbound messages from an application.
+        let inner_conn = InnerConnection::new(
+            msg.recipient.unwrap(),
+            msg.public_key.clone(),
+            keypair.clone(),
+        );
+
+        let resp = ConnectionMessage {
+            recipient: None,
+            public_key: keypair.public_key(),
+            signature: keypair.sign(CONNECTION_MESSAGE_MESSAGE),
+        };
+
+        self.outbound_tx.send(OutboundMessage {
+            message: Message::ConnectionResponse(resp),
+            recipient: msg.recipient.unwrap(),
+        })?;
+
+        self.connections.insert(msg.public_key, inner_conn);
+        Ok(conn)
     }
 }
 
-/// PendingConnection represents a potential connection;
-/// ie. a ConnectionRequest has been sent out, but we haven't
-/// gotten the response yet.
-pub(crate) struct PendingConnection {
-    remote_recipient: Recipient,
-    remote_public_key: FakePublicKey,
-    keypair: FakeKeypair,
+/// Upgrade represents a transport listener upgrade.
+/// Note: we immediately upgrade a connection request to a connection,
+/// so this only contains a channel for receiving that connection.
+pub struct Upgrade {
+    connection_rx: Receiver<Connection>,
 }
 
-/// Upgrade represents a transport upgrade.
-pub struct Upgrade(pub(crate) PendingConnection);
-
 impl Upgrade {
-    fn new(remote_recipient: Recipient, remote_public_key: FakePublicKey) -> Self {
-        Upgrade(PendingConnection {
-            remote_recipient: remote_recipient,
-            remote_public_key: remote_public_key,
-            keypair: FakeKeypair::generate(),
-        })
+    fn new(connection_rx: Receiver<Connection>) -> Upgrade {
+        Upgrade { connection_rx }
     }
 }
 
@@ -225,9 +263,11 @@ impl Future for Upgrade {
 
     // poll checks if the upgrade has turned into a connection yet
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // TODO: check inbound ConnectionResponse channel
-        let conn = Connection::new(self.0.keypair.clone());
-        std::task::Poll::Ready(Ok(conn))
+        if let Ok(conn) = self.connection_rx.recv() {
+            return Poll::Ready(Ok(conn));
+        }
+
+        Poll::Pending
     }
 }
 
@@ -259,7 +299,7 @@ impl Transport for NymTransport {
     }
 
     fn dial(&mut self, _addr: Multiaddr) -> Result<Self::Dial, TransportError<Self::Error>> {
-        // TODO: put connection future into poll_tx
+        // TODO: put PendingConnection into poll_tx
         Err(TransportError::Other(NymTransportError::Unimplemented))
     }
 
@@ -275,23 +315,16 @@ impl Transport for NymTransport {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<TransportEvent<Self::ListenerUpgrade, Self::Error>> {
+        // check for and handle inbound messages
+        self.transport_inbound_loop();
+
+        // new addresses? etc
         if let Ok(ev) = self.poll_rx.recv() {
             return Poll::Ready(ev);
         }
 
+        // new inbound connections?
         if let Poll::Ready(Some(ev)) = self.listeners.poll_next_unpin(cx) {
-            match &ev {
-                // TODO: this is kinda sus, put this in the listener poll instead?
-                TransportEvent::Incoming {
-                    listener_id: _,
-                    upgrade,
-                    local_addr: _,
-                    send_back_addr: _,
-                } => {
-                    self.handle_incoming(&upgrade);
-                }
-                _ => {}
-            }
             return Poll::Ready(ev);
         }
 
