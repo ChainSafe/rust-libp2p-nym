@@ -17,12 +17,9 @@ use std::{
 };
 use tracing::debug;
 
-use crate::connection::{Connection, InnerConnection, PendingConnection};
+use crate::connection::{Connection, InnerConnection, InnerPendingConnection, PendingConnection};
 use crate::error::NymTransportError;
-use crate::keys::{FakeKeypair, FakePublicKey, Keypair};
-use crate::message::{
-    ConnectionMessage, InboundMessage, Message, OutboundMessage, CONNECTION_MESSAGE_MESSAGE,
-};
+use crate::message::{ConnectionId, ConnectionMessage, InboundMessage, Message, OutboundMessage};
 use crate::mixnet::Mixnet;
 
 /// Listener listens for new inbound connection requests.
@@ -57,7 +54,7 @@ impl Stream for Listener {
         if let Ok(upgrade) = self.inbound_rx.recv() {
             return Poll::Ready(Some(TransportEvent::Incoming {
                 listener_id: self.id,
-                upgrade: upgrade,
+                upgrade,
                 local_addr: self.listen_addr.clone(),
                 send_back_addr: self.listen_addr.clone(),
             }));
@@ -73,13 +70,10 @@ pub struct NymTransport {
     self_address: Recipient,
 
     // established connections
-    // map remote_public_key -> InnerConnection
-    connections: HashMap<FakePublicKey, InnerConnection>,
+    connections: HashMap<ConnectionId, InnerConnection>,
 
     // outbound pending dials
-    // map local_public_key -> Upgrade
-    // TODO: needs to be remote_recipient -> Upgrade?
-    pending_dials: HashMap<FakePublicKey, Upgrade>,
+    pending_dials: HashMap<ConnectionId, InnerPendingConnection>,
 
     // inbound connection requests - sent to Listener::poll()
     connection_req_tx: Sender<Upgrade>,
@@ -106,8 +100,7 @@ impl NymTransport {
 
         let (mut mixnet, inbound_rx, outbound_tx) = Mixnet::new(uri).await?;
         let self_address = mixnet.get_self_address().await?;
-        let listen_addr =
-            Multiaddr::from_str(&format!("/nym/{:?}", self_address)).map_err(|e| anyhow!(e))?;
+        let listen_addr = Multiaddr::from_str(&format!("/nym/{:?}", self_address.to_string()))?;
 
         // inbound connection requests only; used from sending between transport_inbound_loop()
         // and Listener::poll().
@@ -134,14 +127,10 @@ impl NymTransport {
             })
             .unwrap();
 
-        // thread::spawn(move || {
-        //     transport_inbound_loop(inbound_rx, connection_req_tx);
-        // });
-
         Ok(Self {
             self_address,
-            connections: HashMap::<FakePublicKey, InnerConnection>::new(),
-            pending_dials: HashMap::<FakePublicKey, Upgrade>::new(),
+            connections: HashMap::<ConnectionId, InnerConnection>::new(),
+            pending_dials: HashMap::<ConnectionId, InnerPendingConnection>::new(),
             connection_req_tx,
             inbound_rx,
             outbound_tx,
@@ -151,12 +140,7 @@ impl NymTransport {
         })
     }
 
-    // this runs in a thread when the transport is constructed.
-    fn transport_inbound_loop(
-        &mut self,
-        // inbound_rx: Receiver<InboundMessage>,
-        // connection_req_tx: Sender<Upgrade>,
-    ) {
+    fn transport_inbound_loop(&mut self) {
         loop {
             // TODO: return if channel closes
             if let Ok(msg) = self.inbound_rx.recv() {
@@ -187,16 +171,30 @@ impl NymTransport {
                                 continue;
                             }
                         }
+
+                        break;
                     }
-                    Message::ConnectionResponse(data) => {
+                    Message::ConnectionResponse(msg) => {
                         // TODO: resolve connection
+                        match self.handle_connection_response(msg) {
+                            Ok(()) => {}
+                            Err(e) => {
+                                debug!("failed to handle incoming ConnectionResponse: {:?}", e);
+                                continue;
+                            }
+                        }
                     }
-                    Message::TransportMessage(data) => {
+                    Message::TransportMessage(msg) => {
                         // TODO: send to connection channel
                     }
                 }
             }
         }
+    }
+
+    fn handle_connection_response(&self, msg: ConnectionMessage) -> Result<(), Error> {
+        let pending_conn = self.pending_dials.get(&msg.id);
+        Ok(())
     }
 
     /// handle_incoming_request handles an incoming connection request, sends back a
@@ -209,30 +207,21 @@ impl NymTransport {
             ));
         }
 
-        let keypair = FakeKeypair::generate();
+        let id = ConnectionId::generate();
 
         // "outer" representation of a connection; this is returned in
         // Upgrade::poll().
         // contains channels for applications to read/write to.
-        let conn = Connection::new(
-            msg.recipient.unwrap(),
-            msg.public_key.clone(),
-            keypair.clone(),
-        );
+        let conn = Connection::new(msg.recipient.unwrap(), id.clone());
 
         // "inner" representation of a connection; this is what we
         // read/write to when receiving messages on the mixnet,
         // or we get outbound messages from an application.
-        let inner_conn = InnerConnection::new(
-            msg.recipient.unwrap(),
-            msg.public_key.clone(),
-            keypair.clone(),
-        );
+        let inner_conn = InnerConnection::new(msg.recipient.unwrap(), id.clone());
 
         let resp = ConnectionMessage {
             recipient: None,
-            public_key: keypair.public_key(),
-            signature: keypair.sign(CONNECTION_MESSAGE_MESSAGE),
+            id: id.clone(),
         };
 
         self.outbound_tx.send(OutboundMessage {
@@ -240,7 +229,7 @@ impl NymTransport {
             recipient: msg.recipient.unwrap(),
         })?;
 
-        self.connections.insert(msg.public_key, inner_conn);
+        self.connections.insert(id, inner_conn);
         Ok(conn)
     }
 }
@@ -262,7 +251,7 @@ impl Future for Upgrade {
     type Output = Result<Connection, NymTransportError>;
 
     // poll checks if the upgrade has turned into a connection yet
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
         if let Ok(conn) = self.connection_rx.recv() {
             return Poll::Ready(Ok(conn));
         }
@@ -298,9 +287,33 @@ impl Transport for NymTransport {
         }
     }
 
-    fn dial(&mut self, _addr: Multiaddr) -> Result<Self::Dial, TransportError<Self::Error>> {
-        // TODO: put PendingConnection into poll_tx
-        Err(TransportError::Other(NymTransportError::Unimplemented))
+    fn dial(&mut self, addr: Multiaddr) -> Result<Self::Dial, TransportError<Self::Error>> {
+        let id = ConnectionId::generate();
+
+        // create remote recipient address
+        // TODO: we need to fork and update the multiaddress crate to support the Nym transport
+        let mut addr = addr;
+        let recipient = Recipient::from_str(&addr.pop().unwrap().to_string())
+            .map_err(|e| TransportError::Other(NymTransportError::InvalidNymMultiaddress(e)))?;
+
+        // create pending conn structs and store
+        let pending_conn = PendingConnection::new(recipient, id.clone());
+        let inner_pending_conn = InnerPendingConnection::new(recipient, id.clone());
+        self.pending_dials.insert(id.clone(), inner_pending_conn);
+
+        // put ConnectionRequest message into outbound message channel
+        let msg = ConnectionMessage {
+            recipient: Some(self.self_address),
+            id,
+        };
+
+        self.outbound_tx
+            .send(OutboundMessage {
+                message: Message::ConnectionRequest(msg),
+                recipient,
+            })
+            .map_err(|e| TransportError::Other(NymTransportError::DialError(Box::new(e))))?;
+        Ok(Box::pin(pending_conn))
     }
 
     // dial_as_listener is unsupported.

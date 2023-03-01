@@ -1,16 +1,33 @@
 use anyhow::{anyhow, Error};
 use nymsphinx::addressing::clients::Recipient;
+use rand_core::{OsRng, RngCore};
 
 use crate::error::NymTransportError;
-use crate::keys::{FakePublicKey, Keypair, PublicKey, SIGNATURE_LENGTH};
 
 const RECIPIENT_LENGTH: usize = Recipient::LEN;
+const CONNECTION_ID_LENGTH: usize = 32;
 
-/// CONNECTION_MESSAGE_MESSAGE is the message signed in a ConnectionMessage.
-pub(crate) const CONNECTION_MESSAGE_MESSAGE: &[u8] = b"NYM_CONNECTION_0";
+/// ConnectionId is a unique, randomly-generated per-connection ID that's used to
+/// identity which connection a message belongs to.
+#[derive(Clone, Default, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct ConnectionId([u8; 32]);
+
+impl ConnectionId {
+    pub(crate) fn generate() -> Self {
+        let mut bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut bytes);
+        ConnectionId(bytes)
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Self {
+        let mut id = [0u8; 32];
+        id[..].copy_from_slice(&bytes[0..CONNECTION_ID_LENGTH]);
+        ConnectionId(id)
+    }
+}
 
 #[derive(Debug)]
-pub(crate) enum Message {
+pub enum Message {
     ConnectionRequest(ConnectionMessage),
     ConnectionResponse(ConnectionMessage),
     TransportMessage(TransportMessage),
@@ -18,20 +35,18 @@ pub(crate) enum Message {
 
 /// ConnectionMessage is exchanged to open a new connection.
 #[derive(Default, Debug)]
-pub(crate) struct ConnectionMessage {
+pub struct ConnectionMessage {
     /// recipient is the sender's Nym address.
     /// only required if this is a ConnectionRequest.
     pub(crate) recipient: Option<Recipient>,
-    pub(crate) public_key: FakePublicKey,
-    pub(crate) signature: Vec<u8>,
+    pub(crate) id: ConnectionId,
 }
 
 /// TransportMessage is sent over a connection after establishment.
 #[derive(Default, Debug)]
-pub(crate) struct TransportMessage {
-    pub(crate) public_key: FakePublicKey,
-    pub(crate) signature: Vec<u8>,
+pub struct TransportMessage {
     pub(crate) message: Vec<u8>,
+    pub(crate) id: ConnectionId,
 }
 
 impl Message {
@@ -43,24 +58,15 @@ impl Message {
         Ok(match bytes[0] {
             0 => Message::ConnectionRequest(ConnectionMessage::try_from_bytes(&bytes[1..])?),
             1 => Message::ConnectionResponse(ConnectionMessage::try_from_bytes(&bytes[1..])?),
-            2 => Message::TransportMessage(TransportMessage::from_bytes(&bytes[1..])),
+            2 => Message::TransportMessage(TransportMessage::try_from_bytes(&bytes[1..])?),
             _ => return Err(anyhow!(NymTransportError::InvalidMessageBytes)),
         })
     }
 }
 
 impl ConnectionMessage {
-    pub(crate) fn new_from_key<K: Keypair>(keypair: K) -> Self {
-        ConnectionMessage {
-            recipient: None,
-            public_key: keypair.public_key(),
-            signature: keypair.sign(CONNECTION_MESSAGE_MESSAGE),
-        }
-    }
-
     fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = self.public_key.to_bytes();
-        bytes.append(&mut self.signature.clone());
+        let mut bytes = self.id.0.to_vec();
         match self.recipient {
             Some(recipient) => {
                 bytes.push(1u8);
@@ -72,14 +78,17 @@ impl ConnectionMessage {
     }
 
     fn try_from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        let public_key = FakePublicKey::from_bytes(&bytes[0..32]);
-        let signature = bytes[32..32 + SIGNATURE_LENGTH].to_vec();
-        let recipient = match bytes[32 + SIGNATURE_LENGTH] {
+        if bytes.len() < CONNECTION_ID_LENGTH + RECIPIENT_LENGTH + 1 {
+            return Err(anyhow!("failed to decode ConnectionMessage; too short"));
+        }
+
+        let id = ConnectionId::from_bytes(&bytes[0..CONNECTION_ID_LENGTH]);
+        let recipient = match bytes[CONNECTION_ID_LENGTH] {
             0u8 => None,
             1u8 => {
                 let mut recipient_bytes = [0u8; RECIPIENT_LENGTH];
                 recipient_bytes[..].copy_from_slice(
-                    &bytes[33 + SIGNATURE_LENGTH..33 + SIGNATURE_LENGTH + RECIPIENT_LENGTH],
+                    &bytes[CONNECTION_ID_LENGTH + 1..CONNECTION_ID_LENGTH + 1 + RECIPIENT_LENGTH],
                 );
                 Some(Recipient::try_from_bytes(recipient_bytes)?)
             }
@@ -87,31 +96,25 @@ impl ConnectionMessage {
                 return Err(anyhow!("invalid recipient prefix byte"));
             }
         };
-        Ok(ConnectionMessage {
-            recipient,
-            public_key,
-            signature,
-        })
+        Ok(ConnectionMessage { recipient, id })
     }
 }
 
 impl TransportMessage {
     fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = self.public_key.to_bytes();
-        bytes.append(&mut self.signature.clone());
+        let mut bytes = self.id.0.to_vec();
         bytes.append(&mut self.message.clone());
         bytes
     }
 
-    fn from_bytes(bytes: &[u8]) -> Self {
-        let public_key = FakePublicKey::from_bytes(&bytes[0..32]);
-        let signature = bytes[32..32 + SIGNATURE_LENGTH].to_vec();
-        let message = bytes[32 + SIGNATURE_LENGTH..].to_vec();
-        TransportMessage {
-            public_key,
-            signature,
-            message,
+    fn try_from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        if bytes.len() < CONNECTION_ID_LENGTH {
+            return Err(anyhow!("failed to decode TransportMessage; too short"));
         }
+
+        let id = ConnectionId::from_bytes(&bytes[0..CONNECTION_ID_LENGTH]);
+        let message = bytes[CONNECTION_ID_LENGTH..].to_vec();
+        Ok(TransportMessage { message, id })
     }
 }
 
@@ -143,7 +146,7 @@ impl Message {
 
 pub(crate) struct InboundMessage(pub Message);
 
-pub(crate) struct OutboundMessage {
+pub struct OutboundMessage {
     pub message: Message,
     pub recipient: Recipient,
 }

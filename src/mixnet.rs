@@ -64,7 +64,7 @@ impl Mixnet {
     // into the inbound channel if it finds one.
     // it blocks if there are no inbound messages.
     pub async fn poll_inbound(&mut self) -> Result<(), Error> {
-        while let Some(Ok(msg)) = self.ws_stream.next().await {
+        if let Some(Ok(msg)) = self.ws_stream.next().await {
             let res = parse_nym_message(msg)
                 .map_err(|e| anyhow!("received unknown message: error {:?}", e))?;
             let msg_bytes = match res {
@@ -76,29 +76,27 @@ impl Mixnet {
                 _ => return Err(anyhow!("received {:?} unexpectedly", res)),
             };
             let data = parse_message_data(&msg_bytes.message).map_err(|e| anyhow!(e))?;
-            self.inbound_tx.send(data).map_err(|e| anyhow!(e))?;
+            self.inbound_tx.send(data)?;
             debug!("put inbound msg into channel");
-            return Ok(());
         }
+
         Ok(())
     }
 
     // poll_outbound checks for the next outbound message and sends it over the mixnet.
     // it blocks if there are no outbound messages.
     pub async fn poll_outbound(&mut self) -> Result<(), Error> {
-        loop {
-            // returns an error if the channel is closed
-            let message = self.outbound_rx.recv().map_err(|e| anyhow!(e))?;
-            self.write_bytes(message.recipient, &message.message.to_bytes())
-                .await
-                .map_err(|e| anyhow!(e))?;
-            return Ok(());
-        }
+        // returns an error if the channel is closed
+        let message = self.outbound_rx.recv().map_err(|e| anyhow!(e))?;
+        self.write_bytes(message.recipient, &message.message.to_bytes())
+            .await
+            .map_err(|e| anyhow!(e))?;
+        Ok(())
     }
 
     async fn write_bytes(&mut self, recipient: Recipient, message: &[u8]) -> Result<(), Error> {
         let nym_packet = ClientRequest::Send {
-            recipient: recipient,
+            recipient,
             message: message.to_vec(),
             connection_id: None, // TODO?
         };
@@ -120,8 +118,8 @@ async fn get_self_address(
         .map_err(|e| anyhow!(e))?;
     match response {
         ServerResponse::SelfAddress(recipient) => Ok(*recipient),
-        ServerResponse::Error(e) => return Err(anyhow!(e)),
-        _ => return Err(anyhow!("received an unexpected response: {:?}", response)),
+        ServerResponse::Error(e) => Err(anyhow!(e)),
+        _ => Err(anyhow!("received an unexpected response: {:?}", response)),
     }
 }
 
@@ -149,8 +147,8 @@ fn parse_nym_message(msg: Message) -> Result<ServerResponse, Error> {
 
 #[cfg(test)]
 mod test {
-    use crate::keys::{FakePublicKey, SIGNATURE_LENGTH};
-    use crate::message::{self, Message, TransportMessage};
+    //use crate::keys::{FakePublicKey, SIGNATURE_LENGTH};
+    use crate::message::{self, ConnectionId, Message, TransportMessage};
     use crate::mixnet::Mixnet;
     use std::thread;
 
@@ -161,8 +159,7 @@ mod test {
         let self_address = mixnet.get_self_address().await.unwrap();
         let msg_inner = "hello".as_bytes();
         let msg = Message::TransportMessage(TransportMessage {
-            public_key: FakePublicKey::default(),
-            signature: vec![0u8; SIGNATURE_LENGTH],
+            id: ConnectionId::generate(),
             message: msg_inner.to_vec(),
         });
 
