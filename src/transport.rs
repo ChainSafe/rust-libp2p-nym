@@ -6,13 +6,12 @@ use libp2p_core::{
     transport::{ListenerId, TransportError, TransportEvent},
     Transport,
 };
-use nymsphinx::addressing::clients::Recipient;
-use std::collections::HashMap;
-use std::sync::mpsc;
-use std::sync::mpsc::{Receiver, Sender};
+use nym_sphinx::addressing::clients::{Recipient, RecipientFormattingError};
 use std::{
+    collections::HashMap,
     pin::Pin,
     str::FromStr,
+    sync::mpsc::{self, Receiver, Sender},
     task::{Context, Poll},
 };
 use tracing::debug;
@@ -27,7 +26,7 @@ pub struct Listener {
     id: ListenerId,
     listen_addr: Multiaddr,
 
-    // receives Upgrades; handling has already been done in handle_inbound
+    // receives Upgrades; handling has already been done in handle_connection_request
     inbound_rx: Receiver<Upgrade>,
 }
 
@@ -89,8 +88,21 @@ pub struct NymTransport {
 
     // inbound messages for Transport.poll()
     poll_rx: Receiver<TransportEvent<Upgrade, NymTransportError>>,
+
     // outbound messages to Transport.poll()
     poll_tx: Sender<TransportEvent<Upgrade, NymTransportError>>,
+}
+
+fn nym_address_to_multiaddress(addr: Recipient) -> Result<Multiaddr, Error> {
+    Multiaddr::from_str(&format!("/nym/{:?}", addr.to_string())).map_err(|e| anyhow!(e))
+}
+
+fn multiaddress_to_nym_address(
+    multiaddr: Multiaddr,
+) -> Result<Recipient, RecipientFormattingError> {
+    let mut addr = multiaddr;
+    Recipient::from_str(&addr.pop().unwrap().to_string())
+    //.map_err(|e| TransportError::Other(NymTransportError::InvalidNymMultiaddress(e)))?;
 }
 
 impl NymTransport {
@@ -100,7 +112,7 @@ impl NymTransport {
 
         let (mut mixnet, inbound_rx, outbound_tx) = Mixnet::new(uri).await?;
         let self_address = mixnet.get_self_address().await?;
-        let listen_addr = Multiaddr::from_str(&format!("/nym/{:?}", self_address.to_string()))?;
+        let listen_addr = nym_address_to_multiaddress(self_address)?;
 
         // inbound connection requests only; used from sending between transport_inbound_loop()
         // and Listener::poll().
@@ -151,7 +163,7 @@ impl NymTransport {
 
                 match msg.0 {
                     Message::ConnectionRequest(inner) => {
-                        match self.handle_incoming_request(inner) {
+                        match self.handle_connection_request(inner) {
                             Ok(conn) => {
                                 let (connection_tx, connection_rx): (
                                     Sender<Connection>,
@@ -175,7 +187,6 @@ impl NymTransport {
                         break;
                     }
                     Message::ConnectionResponse(msg) => {
-                        // TODO: resolve connection
                         match self.handle_connection_response(msg) {
                             Ok(()) => {}
                             Err(e) => {
@@ -192,14 +203,33 @@ impl NymTransport {
         }
     }
 
-    fn handle_connection_response(&self, msg: ConnectionMessage) -> Result<(), Error> {
-        let pending_conn = self.pending_dials.get(&msg.id);
+    // handle_connection_response resolves the pending connection corresponding to the response
+    // (if there is one) into a Connection.
+    fn handle_connection_response(&mut self, msg: ConnectionMessage) -> Result<(), Error> {
+        let inner_pending_conn = self.pending_dials.get(&msg.id);
+        if inner_pending_conn.is_none() {
+            return Err(anyhow!("no connection found for ConnectionRespone"));
+        }
+
+        if self.connections.contains_key(&msg.id) {
+            return Err(anyhow!(
+                "received ConnectionResponse but connection was already established"
+            ));
+        }
+
+        let inner_pending_conn = inner_pending_conn.unwrap();
+
+        // resolve connection and put into inner_pending_conn channel
+        let conn = Connection::new(inner_pending_conn.remote_recipient, msg.id.clone());
+        let inner_conn = InnerConnection::new(inner_pending_conn.remote_recipient, msg.id.clone());
+        inner_pending_conn.connection_tx.send(conn)?;
+        self.connections.insert(msg.id, inner_conn);
         Ok(())
     }
 
-    /// handle_incoming_request handles an incoming connection request, sends back a
+    /// handle_connection_request handles an incoming connection request, sends back a
     /// connection response, and finally completes the upgrade into a Connection.
-    fn handle_incoming_request(&mut self, msg: ConnectionMessage) -> Result<Connection, Error> {
+    fn handle_connection_request(&mut self, msg: ConnectionMessage) -> Result<Connection, Error> {
         if msg.recipient.is_none() {
             return Err(anyhow!(
                 "received None recipient in ConnectionRequest: {:?}",
@@ -261,7 +291,7 @@ impl Future for Upgrade {
 }
 
 impl Transport for NymTransport {
-    type Output = Connection;
+    type Output = Connection; // TODO: this needs to be (PeerId, Connection)
     type Error = NymTransportError;
     type ListenerUpgrade = Upgrade;
     type Dial = BoxFuture<'static, Result<Self::Output, Self::Error>>;
@@ -292,13 +322,16 @@ impl Transport for NymTransport {
 
         // create remote recipient address
         // TODO: we need to fork and update the multiaddress crate to support the Nym transport
-        let mut addr = addr;
-        let recipient = Recipient::from_str(&addr.pop().unwrap().to_string())
+        //let mut addr = addr;
+        //let recipient = Recipient::from_str(&addr.pop().unwrap().to_string())
+        let recipient = multiaddress_to_nym_address(addr)
             .map_err(|e| TransportError::Other(NymTransportError::InvalidNymMultiaddress(e)))?;
 
         // create pending conn structs and store
-        let pending_conn = PendingConnection::new(recipient, id.clone());
-        let inner_pending_conn = InnerPendingConnection::new(recipient, id.clone());
+        let (connection_tx, connection_rx): (Sender<Connection>, Receiver<Connection>) =
+            mpsc::channel();
+        let pending_conn = PendingConnection::new(connection_rx);
+        let inner_pending_conn = InnerPendingConnection::new(recipient, connection_tx);
         self.pending_dials.insert(id.clone(), inner_pending_conn);
 
         // put ConnectionRequest message into outbound message channel
@@ -346,5 +379,25 @@ impl Transport for NymTransport {
 
     fn address_translation(&self, _listen: &Multiaddr, _observed: &Multiaddr) -> Option<Multiaddr> {
         None
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::{nym_address_to_multiaddress, NymTransport};
+    use libp2p_core::transport::Transport;
+
+    #[tokio::test]
+    async fn test_connection() {
+        let uri = "ws://localhost:1977".to_string();
+        let mut dialer_transport = NymTransport::new(&uri).await.unwrap();
+        let listener_transport = NymTransport::new(&uri).await.unwrap();
+        let listener_multiaddr =
+            nym_address_to_multiaddress(listener_transport.self_address).unwrap();
+        dialer_transport
+            .dial(listener_multiaddr)
+            .unwrap()
+            .await
+            .unwrap();
     }
 }

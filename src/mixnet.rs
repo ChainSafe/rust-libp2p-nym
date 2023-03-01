@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Error};
 use futures::{SinkExt, StreamExt};
+use nym_sphinx::addressing::clients::Recipient;
 use nym_websocket::{requests::ClientRequest, responses::ServerResponse};
-use nymsphinx::addressing::clients::Recipient;
 use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender};
 use tokio::net::TcpStream;
@@ -147,7 +147,6 @@ fn parse_nym_message(msg: Message) -> Result<ServerResponse, Error> {
 
 #[cfg(test)]
 mod test {
-    //use crate::keys::{FakePublicKey, SIGNATURE_LENGTH};
     use crate::message::{self, ConnectionId, Message, TransportMessage};
     use crate::mixnet::Mixnet;
     use std::thread;

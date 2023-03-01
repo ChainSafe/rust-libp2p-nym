@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Error};
-use nymsphinx::addressing::clients::Recipient;
+use nym_sphinx::addressing::clients::Recipient;
 use rand_core::{OsRng, RngCore};
 
 use crate::error::NymTransportError;

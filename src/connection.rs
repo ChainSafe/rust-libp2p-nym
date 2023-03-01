@@ -1,12 +1,12 @@
 use futures::prelude::*;
-use nymsphinx::addressing::clients::Recipient;
+use nym_sphinx::addressing::clients::Recipient;
 use std::{
     pin::Pin,
+    sync::mpsc::{Receiver, Sender},
     task::{Context, Poll},
 };
 
 use crate::error::NymTransportError;
-//use crate::keys::{FakeKeypair, FakePublicKey};
 use crate::message::ConnectionId;
 
 /// Connection represents the result of a connection setup process.
@@ -14,8 +14,6 @@ use crate::message::ConnectionId;
 pub struct Connection {
     remote_recipient: Recipient,
     id: ConnectionId,
-    // remote_public_key: FakePublicKey,
-    // keypair: FakeKeypair,
     // TODO: add channels for AsyncRead/AsyncWrite
 }
 
@@ -49,16 +47,12 @@ impl InnerConnection {
 /// ie. a ConnectionRequest has been sent out, but we haven't
 /// gotten the response yet.
 pub(crate) struct PendingConnection {
-    remote_recipient: Recipient,
-    id: ConnectionId,
+    connection_rx: Receiver<Connection>,
 }
 
 impl PendingConnection {
-    pub(crate) fn new(remote_recipient: Recipient, id: ConnectionId) -> Self {
-        PendingConnection {
-            remote_recipient,
-            id,
-        }
+    pub(crate) fn new(connection_rx: Receiver<Connection>) -> Self {
+        PendingConnection { connection_rx }
     }
 }
 
@@ -67,7 +61,10 @@ impl Future for PendingConnection {
 
     // poll checks if the PendingConnection has turned into a connection yet
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // TODO
+        if let Ok(conn) = self.connection_rx.recv() {
+            return Poll::Ready(Ok(conn));
+        }
+
         Poll::Pending
     }
 }
@@ -77,15 +74,15 @@ impl Future for PendingConnection {
 /// When we receive a ConnectionResponse, the PendingConnection corresponding
 /// to this InnerPendingConnection receives the resolved connection.
 pub(crate) struct InnerPendingConnection {
-    remote_recipient: Recipient,
-    id: ConnectionId,
+    pub(crate) remote_recipient: Recipient,
+    pub(crate) connection_tx: Sender<Connection>,
 }
 
 impl InnerPendingConnection {
-    pub(crate) fn new(remote_recipient: Recipient, id: ConnectionId) -> Self {
+    pub(crate) fn new(remote_recipient: Recipient, connection_tx: Sender<Connection>) -> Self {
         InnerPendingConnection {
             remote_recipient,
-            id,
+            connection_tx,
         }
     }
 }

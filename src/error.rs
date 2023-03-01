@@ -1,4 +1,4 @@
-use nymsphinx::addressing::clients::RecipientFormattingError;
+use nym_sphinx::addressing::clients::RecipientFormattingError;
 use std::sync::mpsc::SendError;
 
 use crate::message::OutboundMessage;

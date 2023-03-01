@@ -8,9 +8,10 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 futures = "0.3.26"
-libp2p-core = { version = "0.38.0" }
+#libp2p-core = { version = "0.39" }
+libp2p-core = { git = "https://github.com/ChainSafe/rust-libp2p.git", rev = "e3440d25681df380c9f0f8cfdcfd5ecc0a4f2fb6" }
 nym-websocket = { package = "websocket-requests", git = "https://github.com/nymtech/nym" }
-nymsphinx = { package = "nymsphinx", git = "https://github.com/nymtech/nym" }
+nym-sphinx = { package = "nym-sphinx", git = "https://github.com/nymtech/nym" }
 rand = { version = "0.8", features = [ "std" ] }
 rand_core = "0.6"
 thiserror = "1.0"
@@ -18,3 +19,6 @@ tokio = { version = "1.24", features = [ "full" ] }
 tokio-tungstenite = "0.14"
 tracing = "0.1.23"
 tracing-subscriber = "0.2.15"
+
+#[patch.crates-io]
+#libp2p-core = { git = "https://github.com/ChainSafe/rust-libp2p.git", branch = "noot/nym" }
