@@ -47,6 +47,8 @@ jobs:
     steps:
       - uses: actions/checkout@v1
       - run: rustup component add clippy
+      - name: Install protoc
+        run: sudo apt-get install protobuf-compiler
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
