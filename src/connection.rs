@@ -1,8 +1,9 @@
+use anyhow::anyhow;
+use async_channel::{self, Receiver, Sender};
 use futures::prelude::*;
 use nym_sphinx::addressing::clients::Recipient;
 use std::{
     pin::Pin,
-    sync::mpsc::{Receiver, Sender},
     task::{Context, Poll},
 };
 
@@ -60,9 +61,9 @@ impl Future for PendingConnection {
     type Output = Result<Connection, NymTransportError>;
 
     // poll checks if the PendingConnection has turned into a connection yet
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Ok(conn) = self.connection_rx.recv() {
-            return Poll::Ready(Ok(conn));
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if let Poll::Ready(res) = self.connection_rx.recv().poll_unpin(cx) {
+            return Poll::Ready(res.map_err(|e| NymTransportError::Other(anyhow!(e))));
         }
 
         Poll::Pending

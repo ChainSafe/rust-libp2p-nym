@@ -138,10 +138,6 @@ impl Message {
             }
         }
     }
-
-    pub(crate) fn verify_signature(&self) -> bool {
-        true
-    }
 }
 
 pub(crate) struct InboundMessage(pub Message);

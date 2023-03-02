@@ -1,5 +1,5 @@
-use nym_sphinx::addressing::clients::RecipientFormattingError;
-use std::sync::mpsc::SendError;
+use anyhow::Error as AnyhowError;
+use async_channel::SendError;
 
 use crate::message::OutboundMessage;
 
@@ -9,8 +9,8 @@ pub enum NymTransportError {
     Unimplemented,
     #[error("failed to decode message")]
     InvalidMessageBytes,
-    #[error("invalid Nym multiaddress")]
-    InvalidNymMultiaddress(#[from] RecipientFormattingError),
+    #[error("other")]
+    Other(#[from] AnyhowError),
     #[error("failed to send ConnectionRequest on outbound_tx channel")]
     DialError(#[from] Box<SendError<OutboundMessage>>),
 }

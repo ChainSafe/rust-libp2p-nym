@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
+async-channel = "1.8"
 futures = "0.3.26"
 #libp2p-core = { version = "0.39" }
 libp2p-core = { git = "https://github.com/ChainSafe/rust-libp2p.git", rev = "e3440d25681df380c9f0f8cfdcfd5ecc0a4f2fb6" }

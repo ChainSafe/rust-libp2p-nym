@@ -1,9 +1,8 @@
 use anyhow::{anyhow, Error};
+use async_channel::{self, Receiver, Sender};
 use futures::{SinkExt, StreamExt};
 use nym_sphinx::addressing::clients::Recipient;
 use nym_websocket::{requests::ClientRequest, responses::ServerResponse};
-use std::sync::mpsc;
-use std::sync::mpsc::{Receiver, Sender};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
     connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
@@ -32,9 +31,9 @@ impl Mixnet {
     ) -> Result<(Mixnet, Receiver<InboundMessage>, Sender<OutboundMessage>), Error> {
         let (ws_stream, _) = connect_async(uri).await.map_err(|e| anyhow!(e))?;
         let (inbound_tx, inbound_rx): (Sender<InboundMessage>, Receiver<InboundMessage>) =
-            mpsc::channel();
+            async_channel::unbounded();
         let (outbound_tx, outbound_rx): (Sender<OutboundMessage>, Receiver<OutboundMessage>) =
-            mpsc::channel();
+            async_channel::unbounded();
         Ok((
             Mixnet {
                 ws_stream,
@@ -60,52 +59,53 @@ impl Mixnet {
             .map_err(|e| anyhow!("failed to close: {:?}", e))
     }
 
-    // poll_inbound checks for the next inbound message from the mixnet and puts it
-    // into the inbound channel if it finds one.
-    // it blocks if there are no inbound messages.
-    pub async fn poll_inbound(&mut self) -> Result<(), Error> {
-        if let Some(Ok(msg)) = self.ws_stream.next().await {
-            let res = parse_nym_message(msg)
-                .map_err(|e| anyhow!("received unknown message: error {:?}", e))?;
-            let msg_bytes = match res {
-                ServerResponse::Received(msg_bytes) => {
-                    debug!("received request {:?}", msg_bytes);
-                    msg_bytes
-                }
-                ServerResponse::Error(err) => return Err(anyhow!(err)),
-                _ => return Err(anyhow!("received {:?} unexpectedly", res)),
-            };
-            let data = parse_message_data(&msg_bytes.message).map_err(|e| anyhow!(e))?;
-            self.inbound_tx.send(data)?;
-            debug!("put inbound msg into channel");
+    pub async fn check_inbound(&mut self) -> Result<(), Error> {
+        if let Some(res) = self.ws_stream.next().await {
+            match res {
+                Ok(msg) => return self.handle_inbound(msg).await,
+                Err(e) => return Err(anyhow!(e)),
+            }
         }
 
-        Ok(())
+        Err(anyhow!("ws_stream returned None"))
     }
 
-    // poll_outbound checks for the next outbound message and sends it over the mixnet.
-    // it blocks if there are no outbound messages.
-    pub async fn poll_outbound(&mut self) -> Result<(), Error> {
-        // returns an error if the channel is closed
-        let message = self.outbound_rx.recv().map_err(|e| anyhow!(e))?;
-        self.write_bytes(message.recipient, &message.message.to_bytes())
-            .await
-            .map_err(|e| anyhow!(e))?;
-        Ok(())
+    async fn handle_inbound(&self, msg: Message) -> Result<(), Error> {
+        let res = parse_nym_message(msg)
+            .map_err(|e| anyhow!("received unknown message: error {:?}", e))?;
+        let msg_bytes = match res {
+            ServerResponse::Received(msg_bytes) => {
+                debug!("received request {:?}", msg_bytes);
+                msg_bytes
+            }
+            ServerResponse::Error(err) => return Err(anyhow!(err)),
+            _ => return Err(anyhow!("received {:?} unexpectedly", res)),
+        };
+        let data = parse_message_data(&msg_bytes.message).map_err(|e| anyhow!(e))?;
+        self.inbound_tx.send(data).await.map_err(|e| anyhow!(e))
+    }
+
+    pub async fn check_outbound(&mut self) -> Result<(), Error> {
+        match self.outbound_rx.recv().await {
+            Ok(message) => {
+                self.write_bytes(message.recipient, &message.message.to_bytes())
+                    .await
+            }
+            Err(e) => Err(anyhow!(e)),
+        }
     }
 
     async fn write_bytes(&mut self, recipient: Recipient, message: &[u8]) -> Result<(), Error> {
         let nym_packet = ClientRequest::Send {
             recipient,
             message: message.to_vec(),
-            connection_id: None, // TODO?
+            connection_id: None,
         };
 
         self.ws_stream
             .send(Message::Binary(nym_packet.serialize()))
             .await
-            .map_err(|e| anyhow!("failed to send packet: {:?}", e))?;
-        Ok(())
+            .map_err(|e| anyhow!("failed to send packet: {:?}", e))
     }
 }
 
@@ -149,7 +149,6 @@ fn parse_nym_message(msg: Message) -> Result<ServerResponse, Error> {
 mod test {
     use crate::message::{self, ConnectionId, Message, TransportMessage};
     use crate::mixnet::Mixnet;
-    use std::thread;
 
     #[tokio::test]
     async fn test_mixnet_poll_inbound_and_outbound() {
@@ -167,19 +166,23 @@ mod test {
             message: msg,
             recipient: self_address,
         };
-        thread::spawn(move || {
-            outbound_tx.send(out_msg).unwrap();
+
+        tokio::task::spawn(async move {
+            outbound_tx.send(out_msg).await.unwrap();
         });
-        mixnet.poll_outbound().await.unwrap();
+
+        tokio::task::spawn(async move {
+            mixnet.check_outbound().await.unwrap();
+            mixnet.check_inbound().await.unwrap();
+            mixnet.close().await.unwrap();
+        });
 
         // receive the message from ourselves over the mixnet
-        mixnet.poll_inbound().await.unwrap();
-        let received_msg = inbound_rx.recv().unwrap();
+        let received_msg = inbound_rx.recv().await.unwrap();
         if let Message::TransportMessage(recv_msg) = received_msg.0 {
             assert_eq!(msg_inner, recv_msg.message);
         } else {
             panic!("expected Message::TransportMessage")
         }
-        mixnet.close().await.unwrap();
     }
 }
