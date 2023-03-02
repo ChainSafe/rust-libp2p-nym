@@ -27,6 +27,7 @@ impl ConnectionId {
 }
 
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum Message {
     ConnectionRequest(ConnectionMessage),
     ConnectionResponse(ConnectionMessage),
