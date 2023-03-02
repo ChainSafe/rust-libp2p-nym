@@ -1,8 +1,10 @@
 use anyhow::{anyhow, Error};
 use async_channel::{self, Receiver, Sender};
-use futures::{SinkExt, StreamExt};
+use futures::{future::Future, FutureExt, SinkExt, StreamExt};
 use nym_sphinx::addressing::clients::Recipient;
 use nym_websocket::{requests::ClientRequest, responses::ServerResponse};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
     connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
@@ -61,6 +63,7 @@ impl Mixnet {
 
     pub async fn check_inbound(&mut self) -> Result<(), Error> {
         if let Some(res) = self.ws_stream.next().await {
+            debug!("got inbound message from mixnet: {:?}", res);
             match res {
                 Ok(msg) => return self.handle_inbound(msg).await,
                 Err(e) => return Err(anyhow!(e)),
@@ -105,7 +108,26 @@ impl Mixnet {
         self.ws_stream
             .send(Message::Binary(nym_packet.serialize()))
             .await
-            .map_err(|e| anyhow!("failed to send packet: {:?}", e))
+            .map_err(|e| anyhow!("failed to send packet: {:?}", e))?;
+
+        debug!("wrote message to mixnet");
+        Ok(())
+    }
+}
+
+impl Future for Mixnet {
+    type Output = Result<(), Error>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if let Poll::Ready(res) = Box::pin(self.check_outbound()).poll_unpin(cx) {
+            return Poll::Ready(res);
+        }
+
+        if let Poll::Ready(res) = Box::pin(self.check_inbound()).poll_unpin(cx) {
+            return Poll::Ready(res);
+        }
+
+        Poll::Pending
     }
 }
 

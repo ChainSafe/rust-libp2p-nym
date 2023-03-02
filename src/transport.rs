@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Error};
 use async_channel::{self, Receiver, Sender};
 use futures::future::BoxFuture;
-use futures::{prelude::*, stream::SelectAll};
+use futures::prelude::*;
 use libp2p_core::{
     multiaddr::{Multiaddr, Protocol},
     transport::{ListenerId, TransportError, TransportEvent},
@@ -12,69 +12,27 @@ use std::{
     collections::HashMap,
     pin::Pin,
     str::FromStr,
-    task::{Context, Poll},
+    task::{Context, Poll, Waker},
 };
+use tracing::debug;
 
-use crate::connection::{Connection, InnerConnection, InnerPendingConnection, PendingConnection};
+use crate::connection::{Connection, InnerConnection, PendingConnection};
 use crate::error::NymTransportError;
 use crate::message::{ConnectionId, ConnectionMessage, InboundMessage, Message, OutboundMessage};
 use crate::mixnet::Mixnet;
-
-/// Listener listens for new inbound connection requests.
-pub struct Listener {
-    id: ListenerId,
-    listen_addr: Multiaddr,
-
-    // receives Upgrades; handling has already been done in handle_connection_request
-    inbound_rx: Receiver<Upgrade>,
-}
-
-impl Listener {
-    fn new(id: ListenerId, listen_addr: Multiaddr, inbound_rx: Receiver<Upgrade>) -> Self {
-        Self {
-            id,
-            listen_addr,
-            inbound_rx,
-        }
-    }
-
-    fn close(&self) {
-        // TODO
-    }
-}
-
-impl Stream for Listener {
-    type Item = TransportEvent<Upgrade, NymTransportError>;
-
-    /// poll_next should return any inbound messages on the listener.
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // poll self.inbound_rx and emit TransportEvent::Incoming if we get an Upgrade
-        if let Poll::Ready(Ok(upgrade)) = self.inbound_rx.recv().poll_unpin(cx) {
-            return Poll::Ready(Some(TransportEvent::Incoming {
-                listener_id: self.id,
-                upgrade,
-                local_addr: self.listen_addr.clone(),
-                send_back_addr: self.listen_addr.clone(),
-            }));
-        }
-
-        Poll::Pending
-    }
-}
 
 /// NymTransport implements the Transport trait using the Nym mixnet.
 pub struct NymTransport {
     // our Nym address
     self_address: Recipient,
+    pub(crate) listen_addr: Multiaddr,
+    pub(crate) listener_id: ListenerId,
 
     // established connections
     connections: HashMap<ConnectionId, InnerConnection>,
 
     // outbound pending dials
-    pending_dials: HashMap<ConnectionId, InnerPendingConnection>,
-
-    // inbound connection requests - sent to Listener::poll()
-    connection_req_tx: Sender<Upgrade>,
+    pending_dials: HashMap<ConnectionId, PendingConnection>,
 
     // inbound mixnet messages
     inbound_rx: Receiver<InboundMessage>,
@@ -82,42 +40,27 @@ pub struct NymTransport {
     // outbound mixnet messages
     outbound_tx: Sender<OutboundMessage>,
 
-    // listeners for inbound connection requests
-    listeners: SelectAll<Listener>,
-
     // inbound messages for Transport.poll()
     poll_rx: Receiver<TransportEvent<Upgrade, NymTransportError>>,
 
     // outbound messages to Transport.poll()
     poll_tx: Sender<TransportEvent<Upgrade, NymTransportError>>,
+
+    mixnet: Mixnet,
+
+    waker: Option<Waker>,
 }
 
 impl NymTransport {
     pub async fn new(uri: &String) -> Result<Self, Error> {
         // accept websocket uri and call Mixnet::new()
         // then, cache our Nym address and create the listener for it
-
         let (mut mixnet, inbound_rx, outbound_tx) = Mixnet::new(uri).await?;
         let self_address = mixnet.get_self_address().await?;
         let listen_addr = nym_address_to_multiaddress(self_address)?;
-
-        // tokio::task::spawn(async move {
-        //     mixnet.await.unwrap();
-        // });
-
-        // inbound connection requests only; used from sending between transport_inbound_loop()
-        // and Listener::poll().
-        let (connection_req_tx, connection_req_rx): (Sender<Upgrade>, Receiver<Upgrade>) =
-            async_channel::unbounded();
-
-        let mut listeners = SelectAll::<Listener>::new();
         let listener_id = ListenerId::new();
-        listeners.push(Listener::new(
-            listener_id,
-            listen_addr.clone(),
-            connection_req_rx,
-        ));
 
+        #[allow(clippy::type_complexity)]
         let (poll_tx, poll_rx): (
             Sender<TransportEvent<Upgrade, NymTransportError>>,
             Receiver<TransportEvent<Upgrade, NymTransportError>>,
@@ -126,67 +69,23 @@ impl NymTransport {
         poll_tx
             .send(TransportEvent::NewAddress {
                 listener_id,
-                listen_addr,
+                listen_addr: listen_addr.clone(),
             })
             .await?;
 
         Ok(Self {
             self_address,
+            listen_addr,
+            listener_id,
             connections: HashMap::<ConnectionId, InnerConnection>::new(),
-            pending_dials: HashMap::<ConnectionId, InnerPendingConnection>::new(),
-            connection_req_tx,
+            pending_dials: HashMap::<ConnectionId, PendingConnection>::new(),
             inbound_rx,
             outbound_tx,
-            listeners,
             poll_rx,
             poll_tx,
+            mixnet,
+            waker: None,
         })
-    }
-
-    fn poll_inbound(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
-        if let Poll::Ready(Ok(msg)) = self.inbound_rx.recv().poll_unpin(cx) {
-            return match msg.0 {
-                Message::ConnectionRequest(inner) => {
-                    match self.handle_connection_request(inner) {
-                        Ok(conn) => {
-                            let (connection_tx, connection_rx): (
-                                Sender<Connection>,
-                                Receiver<Connection>,
-                            ) = async_channel::unbounded(); // TODO: only size 1, close after?
-
-                            let upgrade = Upgrade::new(connection_rx);
-                            // send connection into Upgrade channel
-                            tokio::task::spawn(async move {
-                                connection_tx.send(conn).await.unwrap();
-                            });
-                            let connection_req_tx = self.connection_req_tx.clone();
-                            tokio::task::spawn(async move {
-                                connection_req_tx.send(upgrade).await.unwrap();
-                            });
-                            Poll::Ready(Ok(()))
-                        }
-                        Err(e) => Poll::Ready(Err(anyhow!(
-                            "failed to handle incoming ConnectionRequest: {:?}",
-                            e
-                        ))),
-                    }
-                }
-                Message::ConnectionResponse(msg) => match self.handle_connection_response(msg) {
-                    // Ok(()) => Poll::Ready(Ok(())),
-                    // Err(e) => Poll::Ready(Err(anyhow!(
-                    //     "failed to handle incoming ConnectionResponse: {:?}",
-                    //     e
-                    // ))),
-                    _ => Poll::Pending,
-                },
-                Message::TransportMessage(_msg) => {
-                    // TODO: send to connection channel
-                    Poll::Pending
-                }
-            };
-        };
-
-        Poll::Pending
     }
 
     // handle_connection_response resolves the pending connection corresponding to the response
@@ -209,9 +108,11 @@ impl NymTransport {
         let conn = Connection::new(inner_pending_conn.remote_recipient, msg.id.clone());
         let inner_conn = InnerConnection::new(inner_pending_conn.remote_recipient, msg.id.clone());
         let connection_tx = inner_pending_conn.connection_tx.clone();
+
         tokio::task::spawn(async move {
             connection_tx.send(conn).await.unwrap();
         });
+
         self.connections.insert(msg.id, inner_conn);
         Ok(())
     }
@@ -226,21 +127,21 @@ impl NymTransport {
             ));
         }
 
-        let id = ConnectionId::generate();
+        // TODO ensure we don't already have a conn w the same id
 
         // "outer" representation of a connection; this is returned in
         // Upgrade::poll().
         // contains channels for applications to read/write to.
-        let conn = Connection::new(msg.recipient.unwrap(), id.clone());
+        let conn = Connection::new(msg.recipient.unwrap(), msg.id.clone());
 
         // "inner" representation of a connection; this is what we
         // read/write to when receiving messages on the mixnet,
         // or we get outbound messages from an application.
-        let inner_conn = InnerConnection::new(msg.recipient.unwrap(), id.clone());
+        let inner_conn = InnerConnection::new(msg.recipient.unwrap(), msg.id.clone());
 
         let resp = ConnectionMessage {
             recipient: None,
-            id: id.clone(),
+            id: msg.id.clone(),
         };
 
         let outbound_tx = self.outbound_tx.clone();
@@ -254,8 +155,69 @@ impl NymTransport {
                 .unwrap();
         });
 
-        self.connections.insert(id, inner_conn);
+        self.connections.insert(msg.id, inner_conn);
         Ok(conn)
+    }
+}
+
+impl Stream for NymTransport {
+    type Item = Result<Upgrade, Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if let Poll::Ready(Ok(msg)) = self.inbound_rx.recv().poll_unpin(cx) {
+            match msg.0 {
+                Message::ConnectionRequest(inner) => {
+                    debug!("got connection request {:?}", inner);
+                    match self.handle_connection_request(inner) {
+                        Ok(conn) => {
+                            let (connection_tx, connection_rx): (
+                                Sender<Connection>,
+                                Receiver<Connection>,
+                            ) = async_channel::unbounded(); // TODO: only size 1, close after?
+
+                            let upgrade = Upgrade::new(connection_rx);
+
+                            // send connection into Upgrade channel
+                            tokio::task::spawn(async move {
+                                connection_tx.send(conn).await.unwrap();
+                            });
+
+                            if let Some(waker) = self.waker.take() {
+                                waker.wake();
+                            };
+
+                            return Poll::Ready(Some(Ok(upgrade)));
+                        }
+                        Err(e) => {
+                            return Poll::Ready(Some(Err(anyhow!(
+                                "failed to handle incoming ConnectionRequest: {:?}",
+                                e
+                            ))))
+                        }
+                    }
+                }
+                Message::ConnectionResponse(msg) => {
+                    debug!("got connection response {:?}", msg);
+                    match self.handle_connection_response(msg) {
+                        Ok(()) => {
+                            return Poll::Pending;
+                        }
+                        Err(e) => {
+                            return Poll::Ready(Some(Err(anyhow!(
+                                "failed to handle incoming ConnectionResponse: {:?}",
+                                e
+                            ))))
+                        }
+                    }
+                }
+                Message::TransportMessage(_msg) => {
+                    // TODO: send to connection channel
+                    return Poll::Pending;
+                }
+            };
+        };
+
+        Poll::Pending
     }
 }
 
@@ -297,25 +259,28 @@ impl Transport for NymTransport {
     }
 
     fn remove_listener(&mut self, id: ListenerId) -> bool {
-        if let Some(listener) = self.listeners.iter_mut().find(|l| l.id == id) {
-            listener.close();
-            let poll_tx = self.poll_tx.clone();
-            tokio::task::spawn(async move {
-                poll_tx
-                    .send(TransportEvent::ListenerClosed {
-                        listener_id: id,
-                        reason: Ok(()),
-                    })
-                    .await
-                    .unwrap();
-            });
-            true
-        } else {
-            false
+        if self.listener_id != id {
+            return false;
         }
+
+        // TODO: close channels?
+        let poll_tx = self.poll_tx.clone();
+        tokio::task::spawn(async move {
+            poll_tx
+                .send(TransportEvent::ListenerClosed {
+                    listener_id: id,
+                    reason: Ok(()),
+                })
+                .await
+                .unwrap();
+        });
+
+        true
     }
 
     fn dial(&mut self, addr: Multiaddr) -> Result<Self::Dial, TransportError<Self::Error>> {
+        debug!("dialing {}", addr);
+
         let id = ConnectionId::generate();
 
         // create remote recipient address
@@ -325,8 +290,8 @@ impl Transport for NymTransport {
         // create pending conn structs and store
         let (connection_tx, connection_rx): (Sender<Connection>, Receiver<Connection>) =
             async_channel::unbounded(); // TODO: make this bounded?
-        let pending_conn = PendingConnection::new(connection_rx);
-        let inner_pending_conn = InnerPendingConnection::new(recipient, connection_tx);
+
+        let inner_pending_conn = PendingConnection::new(recipient, connection_tx);
         self.pending_dials.insert(id.clone(), inner_pending_conn);
 
         // put ConnectionRequest message into outbound message channel
@@ -336,16 +301,28 @@ impl Transport for NymTransport {
         };
 
         let outbound_tx = self.outbound_tx.clone();
-        tokio::task::spawn(async move {
+
+        let mut waker = self.waker.clone();
+        Ok(async move {
             outbound_tx
                 .send(OutboundMessage {
                     message: Message::ConnectionRequest(msg),
                     recipient,
                 })
                 .await
-                .unwrap();
-        });
-        Ok(Box::pin(pending_conn))
+                .map_err(|e| NymTransportError::Other(anyhow!(e)))?;
+
+            if let Some(waker) = waker.take() {
+                waker.wake();
+            };
+
+            let conn = connection_rx
+                .recv()
+                .await
+                .map_err(|e| NymTransportError::Other(anyhow!(e)))?;
+            Ok(conn)
+        }
+        .boxed())
     }
 
     // dial_as_listener is unsupported.
@@ -360,21 +337,34 @@ impl Transport for NymTransport {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<TransportEvent<Self::ListenerUpgrade, Self::Error>> {
-        // check for and handle inbound messages
-        if let Poll::Ready(_res) = self.as_mut().poll_inbound(cx) {
-            // TODO: wake??
-        }
-
         // new addresses? etc
         if let Poll::Ready(Ok(res)) = self.poll_rx.recv().poll_unpin(cx) {
             return Poll::Ready(res);
         }
 
-        // new inbound connections?
-        if let Poll::Ready(Some(ev)) = self.listeners.poll_next_unpin(cx) {
-            return Poll::Ready(ev);
+        // loop for mixnet events
+        while let Poll::Ready(res) = self.mixnet.poll_unpin(cx) {
+            // TODO: more informative events?
+            debug!("got mixnet event: {:?}", res);
         }
 
+        // check for and handle inbound messages
+        if let Poll::Ready(Some(res)) = self.as_mut().poll_next(cx) {
+            return match res {
+                Ok(upgrade) => Poll::Ready(TransportEvent::Incoming {
+                    listener_id: self.listener_id,
+                    upgrade,
+                    local_addr: self.listen_addr.clone(),
+                    send_back_addr: self.listen_addr.clone(),
+                }),
+                Err(e) => Poll::Ready(TransportEvent::ListenerError {
+                    listener_id: self.listener_id,
+                    error: NymTransportError::Other(e),
+                }),
+            };
+        }
+
+        self.waker = Some(cx.waker().clone());
         Poll::Pending
     }
 
@@ -384,7 +374,7 @@ impl Transport for NymTransport {
 }
 
 fn nym_address_to_multiaddress(addr: Recipient) -> Result<Multiaddr, Error> {
-    Multiaddr::from_str(&format!("/nym/{}", addr.to_string())).map_err(|e| anyhow!(e))
+    Multiaddr::from_str(&format!("/nym/{}", addr)).map_err(|e| anyhow!(e))
 }
 
 fn multiaddress_to_nym_address(multiaddr: Multiaddr) -> Result<Recipient, Error> {
@@ -398,21 +388,75 @@ fn multiaddress_to_nym_address(multiaddr: Multiaddr) -> Result<Recipient, Error>
 #[cfg(test)]
 mod test {
     use super::{nym_address_to_multiaddress, NymTransport};
-    use libp2p_core::transport::Transport;
+    use futures::future::poll_fn;
+    use libp2p_core::transport::{Transport, TransportEvent};
+    use std::pin::Pin;
 
     #[tokio::test]
     async fn test_connection() {
-        let uri = "ws://localhost:1977".to_string();
-        let mut dialer_transport = NymTransport::new(&uri).await.unwrap();
-        let listener_transport = NymTransport::new(&uri).await.unwrap();
+        let dialer_uri = "ws://localhost:1977".to_string();
+        let mut dialer_transport = NymTransport::new(&dialer_uri).await.unwrap();
+        let listener_uri = "ws://localhost:1978".to_string();
+        let mut listener_transport = NymTransport::new(&listener_uri).await.unwrap();
         let listener_multiaddr =
             nym_address_to_multiaddress(listener_transport.self_address).unwrap();
-        println!("listener_multiaddr {:?}", listener_multiaddr);
 
-        dialer_transport
-            .dial(listener_multiaddr)
-            .unwrap()
-            .await
-            .unwrap();
+        let res = poll_fn(|cx| Pin::new(&mut dialer_transport).as_mut().poll(cx)).await;
+        match res {
+            TransportEvent::NewAddress {
+                listener_id,
+                listen_addr,
+            } => {
+                assert_eq!(listener_id, dialer_transport.listener_id);
+                assert_eq!(listen_addr, dialer_transport.listen_addr);
+            }
+            _ => panic!("expected TransportEvent::NewAddress"),
+        }
+
+        let res = poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).await;
+        match res {
+            TransportEvent::NewAddress {
+                listener_id,
+                listen_addr,
+            } => {
+                assert_eq!(listener_id, listener_transport.listener_id);
+                assert_eq!(listen_addr, listener_transport.listen_addr);
+            }
+            _ => panic!("expected TransportEvent::NewAddress"),
+        }
+
+        // dial the remote peer; put awaiting the dial into a thread
+        let dial = dialer_transport.dial(listener_multiaddr).unwrap();
+        let maybe_conn = tokio::task::spawn(async move {
+            dial.await.unwrap();
+        });
+
+        tokio::task::spawn(async move {
+            // should send the connection request message and receive the response from the mixnet
+            let _res = poll_fn(|cx| Pin::new(&mut dialer_transport).as_mut().poll(cx)).await;
+        });
+
+        tokio::task::spawn(async move {
+            // should receive the connection request from the mixnet
+            let res = poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).await;
+            match res {
+                TransportEvent::Incoming {
+                    listener_id,
+                    upgrade: _,
+                    local_addr,
+                    send_back_addr,
+                } => {
+                    assert_eq!(listener_id, listener_transport.listener_id);
+                    assert_eq!(local_addr, listener_transport.listen_addr);
+                    assert_eq!(send_back_addr, listener_transport.listen_addr);
+                }
+                _ => panic!("expected TransportEvent::Incoming, got {:?}", res),
+            }
+
+            // should send the response into the mixnet
+            let _res = poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).await;
+        });
+
+        maybe_conn.await.unwrap();
     }
 }

@@ -36,10 +36,10 @@ pub enum Message {
 /// ConnectionMessage is exchanged to open a new connection.
 #[derive(Default, Debug)]
 pub struct ConnectionMessage {
+    pub(crate) id: ConnectionId,
     /// recipient is the sender's Nym address.
     /// only required if this is a ConnectionRequest.
     pub(crate) recipient: Option<Recipient>,
-    pub(crate) id: ConnectionId,
 }
 
 /// TransportMessage is sent over a connection after establishment.
@@ -78,7 +78,7 @@ impl ConnectionMessage {
     }
 
     fn try_from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.len() < CONNECTION_ID_LENGTH + RECIPIENT_LENGTH + 1 {
+        if bytes.len() < CONNECTION_ID_LENGTH + 1 {
             return Err(anyhow!("failed to decode ConnectionMessage; too short"));
         }
 
@@ -86,6 +86,10 @@ impl ConnectionMessage {
         let recipient = match bytes[CONNECTION_ID_LENGTH] {
             0u8 => None,
             1u8 => {
+                if bytes.len() < CONNECTION_ID_LENGTH + 1 + RECIPIENT_LENGTH {
+                    return Err(anyhow!("failed to decode ConnectionMessage; no recipient"));
+                }
+
                 let mut recipient_bytes = [0u8; RECIPIENT_LENGTH];
                 recipient_bytes[..].copy_from_slice(
                     &bytes[CONNECTION_ID_LENGTH + 1..CONNECTION_ID_LENGTH + 1 + RECIPIENT_LENGTH],
