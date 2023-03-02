@@ -14,7 +14,7 @@ use tracing::debug;
 use crate::message::*;
 
 /// Mixnet implements a read/write connection to a Nym websockets endpoint.
-pub struct Mixnet {
+pub(crate) struct Mixnet {
     // the websocket connection between us and the Nym endpoint we're using.
     ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
 
@@ -47,21 +47,22 @@ impl Mixnet {
         ))
     }
 
-    pub async fn get_self_address(&mut self) -> Result<Recipient, Error> {
+    pub(crate) async fn get_self_address(&mut self) -> Result<Recipient, Error> {
         let recipient = get_self_address(&mut self.ws_stream)
             .await
             .map_err(|e| anyhow!(e))?;
         Ok(recipient)
     }
 
-    pub async fn close(&mut self) -> Result<(), Error> {
+    #[allow(dead_code)]
+    pub(crate) async fn close(&mut self) -> Result<(), Error> {
         self.ws_stream
             .close(None)
             .await
             .map_err(|e| anyhow!("failed to close: {:?}", e))
     }
 
-    pub async fn check_inbound(&mut self) -> Result<(), Error> {
+    async fn check_inbound(&mut self) -> Result<(), Error> {
         if let Some(res) = self.ws_stream.next().await {
             debug!("got inbound message from mixnet: {:?}", res);
             match res {
@@ -88,7 +89,7 @@ impl Mixnet {
         self.inbound_tx.send(data).await.map_err(|e| anyhow!(e))
     }
 
-    pub async fn check_outbound(&mut self) -> Result<(), Error> {
+    async fn check_outbound(&mut self) -> Result<(), Error> {
         match self.outbound_rx.recv().await {
             Ok(message) => {
                 self.write_bytes(message.recipient, &message.message.to_bytes())

@@ -1,5 +1,5 @@
-pub mod connection;
+pub(crate) mod connection;
 pub mod error;
-pub mod message;
-pub mod mixnet;
+pub(crate) mod message;
+pub(crate) mod mixnet;
 pub mod transport;

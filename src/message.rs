@@ -27,7 +27,7 @@ impl ConnectionId {
 }
 
 #[derive(Debug)]
-pub enum Message {
+pub(crate) enum Message {
     ConnectionRequest(ConnectionMessage),
     ConnectionResponse(ConnectionMessage),
     TransportMessage(TransportMessage),
@@ -35,7 +35,7 @@ pub enum Message {
 
 /// ConnectionMessage is exchanged to open a new connection.
 #[derive(Default, Debug)]
-pub struct ConnectionMessage {
+pub(crate) struct ConnectionMessage {
     pub(crate) id: ConnectionId,
     /// recipient is the sender's Nym address.
     /// only required if this is a ConnectionRequest.
@@ -44,7 +44,7 @@ pub struct ConnectionMessage {
 
 /// TransportMessage is sent over a connection after establishment.
 #[derive(Default, Debug)]
-pub struct TransportMessage {
+pub(crate) struct TransportMessage {
     pub(crate) message: Vec<u8>,
     pub(crate) id: ConnectionId,
 }
@@ -144,11 +144,11 @@ impl Message {
     }
 }
 
-pub(crate) struct InboundMessage(pub Message);
+pub(crate) struct InboundMessage(pub(crate) Message);
 
-pub struct OutboundMessage {
-    pub message: Message,
-    pub recipient: Recipient,
+pub(crate) struct OutboundMessage {
+    pub(crate) message: Message,
+    pub(crate) recipient: Recipient,
 }
 
 pub(crate) fn parse_message_data(data: &[u8]) -> Result<InboundMessage, Error> {
