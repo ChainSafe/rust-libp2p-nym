@@ -1,7 +1,6 @@
 use anyhow::{anyhow, Error};
 use async_channel::{self, Receiver, Sender};
-use futures::future::BoxFuture;
-use futures::prelude::*;
+use futures::{future::BoxFuture, prelude::*};
 use libp2p_core::{
     multiaddr::{Multiaddr, Protocol},
     transport::{ListenerId, TransportError, TransportEvent},
@@ -47,7 +46,6 @@ pub struct NymTransport {
     poll_tx: Sender<TransportEvent<Upgrade, NymTransportError>>,
 
     mixnet: Mixnet,
-
     waker: Option<Waker>,
 }
 
@@ -91,8 +89,8 @@ impl NymTransport {
     // handle_connection_response resolves the pending connection corresponding to the response
     // (if there is one) into a Connection.
     fn handle_connection_response(&mut self, msg: ConnectionMessage) -> Result<(), Error> {
-        let inner_pending_conn = self.pending_dials.get(&msg.id);
-        if inner_pending_conn.is_none() {
+        let pending_conn = self.pending_dials.get(&msg.id);
+        if pending_conn.is_none() {
             return Err(anyhow!("no connection found for ConnectionRespone"));
         }
 
@@ -102,12 +100,12 @@ impl NymTransport {
             ));
         }
 
-        let inner_pending_conn = inner_pending_conn.unwrap();
+        let pending_conn = pending_conn.unwrap();
 
-        // resolve connection and put into inner_pending_conn channel
-        let conn = Connection::new(inner_pending_conn.remote_recipient, msg.id.clone());
-        let inner_conn = InnerConnection::new(inner_pending_conn.remote_recipient, msg.id.clone());
-        let connection_tx = inner_pending_conn.connection_tx.clone();
+        // resolve connection and put into pending_conn channel
+        let conn = Connection::new(pending_conn.remote_recipient, msg.id.clone());
+        let inner_conn = InnerConnection::new(pending_conn.remote_recipient, msg.id.clone());
+        let connection_tx = pending_conn.connection_tx.clone();
 
         tokio::task::spawn(async move {
             connection_tx.send(conn).await.unwrap();
@@ -127,7 +125,12 @@ impl NymTransport {
             ));
         }
 
-        // TODO ensure we don't already have a conn w the same id
+        // ensure we don't already have a conn with the same id
+        if self.connections.get(&msg.id).is_some() {
+            return Err(anyhow!(
+                "cannot handle connection request; already have connection with given ID"
+            ));
+        }
 
         // "outer" representation of a connection; this is returned in
         // Upgrade::poll().
@@ -163,6 +166,7 @@ impl NymTransport {
 impl Stream for NymTransport {
     type Item = Result<Upgrade, Error>;
 
+    // poll_next polls for inbound messages from the mixnet
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if let Poll::Ready(Ok(msg)) = self.inbound_rx.recv().poll_unpin(cx) {
             match msg.0 {
@@ -170,17 +174,17 @@ impl Stream for NymTransport {
                     debug!("got connection request {:?}", inner);
                     match self.handle_connection_request(inner) {
                         Ok(conn) => {
-                            let (connection_tx, connection_rx): (
-                                Sender<Connection>,
-                                Receiver<Connection>,
-                            ) = async_channel::unbounded(); // TODO: only size 1, close after?
+                            // let (connection_tx, connection_rx): (
+                            //     Sender<Connection>,
+                            //     Receiver<Connection>,
+                            // ) = async_channel::unbounded(); // TODO: only size 1, close after?
 
-                            let upgrade = Upgrade::new(connection_rx);
+                            let upgrade = Upgrade::new(conn);
 
-                            // send connection into Upgrade channel
-                            tokio::task::spawn(async move {
-                                connection_tx.send(conn).await.unwrap();
-                            });
+                            // // send connection into Upgrade channel
+                            // tokio::task::spawn(async move {
+                            //     connection_tx.send(conn).await.unwrap();
+                            // });
 
                             if let Some(waker) = self.waker.take() {
                                 waker.wake();
@@ -225,12 +229,13 @@ impl Stream for NymTransport {
 /// Note: we immediately upgrade a connection request to a connection,
 /// so this only contains a channel for receiving that connection.
 pub struct Upgrade {
-    connection_rx: Receiver<Connection>,
+    conn: Connection,
+    //connection_rx: Receiver<Connection>,
 }
 
 impl Upgrade {
-    fn new(connection_rx: Receiver<Connection>) -> Upgrade {
-        Upgrade { connection_rx }
+    fn new(conn: Connection) -> Upgrade {
+        Upgrade { conn }
     }
 }
 
@@ -238,12 +243,14 @@ impl Future for Upgrade {
     type Output = Result<Connection, NymTransportError>;
 
     // poll checks if the upgrade has turned into a connection yet
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Poll::Ready(res) = self.connection_rx.recv().poll_unpin(cx) {
-            return Poll::Ready(res.map_err(|e| NymTransportError::Other(anyhow!(e))));
-        }
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // if let Poll::Ready(res) = self.connection_rx.recv().poll_unpin(cx) {
+        //     return Poll::Ready(res.map_err(|e| NymTransportError::Other(anyhow!(e))));
+        // }
 
-        Poll::Pending
+        // TODO: idk if this will still be possible once Connection is fully implemented
+        let conn = self.conn.clone();
+        Poll::Ready(Ok(conn))
     }
 }
 
@@ -337,7 +344,7 @@ impl Transport for NymTransport {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<TransportEvent<Self::ListenerUpgrade, Self::Error>> {
-        // new addresses? etc
+        // new addresses + listener close events
         if let Poll::Ready(Ok(res)) = self.poll_rx.recv().poll_unpin(cx) {
             return Poll::Ready(res);
         }
@@ -439,24 +446,28 @@ mod test {
         tokio::task::spawn(async move {
             // should receive the connection request from the mixnet
             let res = poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).await;
-            match res {
+            let upgrade = match res {
                 TransportEvent::Incoming {
                     listener_id,
-                    upgrade: _,
+                    upgrade,
                     local_addr,
                     send_back_addr,
                 } => {
                     assert_eq!(listener_id, listener_transport.listener_id);
                     assert_eq!(local_addr, listener_transport.listen_addr);
                     assert_eq!(send_back_addr, listener_transport.listen_addr);
+                    upgrade
                 }
                 _ => panic!("expected TransportEvent::Incoming, got {:?}", res),
-            }
+            };
+
+            let _listener_conn = upgrade.await.unwrap();
 
             // should send the response into the mixnet
             let _res = poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).await;
         });
 
+        // dialer's connection
         maybe_conn.await.unwrap();
     }
 }

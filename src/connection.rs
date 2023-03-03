@@ -4,7 +4,7 @@ use nym_sphinx::addressing::clients::Recipient;
 use crate::message::ConnectionId;
 
 /// Connection represents the result of a connection setup process.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(dead_code)] // TODO: remove later
 pub struct Connection {
     remote_recipient: Recipient,
