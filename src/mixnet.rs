@@ -15,15 +15,15 @@ use crate::message::*;
 
 /// Mixnet implements a read/write connection to a Nym websockets endpoint.
 pub(crate) struct Mixnet {
-    // the websocket connection between us and the Nym endpoint we're using.
+    /// the websocket connection between us and the Nym endpoint we're using.
     ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
 
-    // a channel of inbound messages from the endpoint.
-    // the transport reads from (listens) to the receiver of this channel.
+    /// a channel of inbound messages from the endpoint.
+    /// the transport reads from (listens) to the receiver of this channel.
     inbound_tx: Sender<InboundMessage>,
 
-    // a channel of outbound messages to be written to the endpoint.
-    // the transport writes to the sender of this channel.
+    /// a channel of outbound messages to be written to the endpoint.
+    /// the transport writes to the sender of this channel.
     outbound_rx: Receiver<OutboundMessage>,
 }
 
@@ -111,25 +111,34 @@ impl Mixnet {
             .await
             .map_err(|e| anyhow!("failed to send packet: {:?}", e))?;
 
-        debug!("wrote message to mixnet");
+        debug!(
+            "wrote message to mixnet: recipient: {:?}",
+            recipient.to_string()
+        );
         Ok(())
     }
 }
 
 impl Future for Mixnet {
-    type Output = Result<(), Error>;
+    type Output = Result<MixnetEvent, Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if let Poll::Ready(res) = Box::pin(self.check_outbound()).poll_unpin(cx) {
-            return Poll::Ready(res);
+            return Poll::Ready(res.map(|_| MixnetEvent::Outbound));
         }
 
         if let Poll::Ready(res) = Box::pin(self.check_inbound()).poll_unpin(cx) {
-            return Poll::Ready(res);
+            return Poll::Ready(res.map(|_| MixnetEvent::Inbound));
         }
 
         Poll::Pending
     }
+}
+
+#[derive(Debug)]
+pub(crate) enum MixnetEvent {
+    Inbound,
+    Outbound,
 }
 
 async fn get_self_address(
