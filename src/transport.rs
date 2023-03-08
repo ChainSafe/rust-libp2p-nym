@@ -1,4 +1,3 @@
-use anyhow::{anyhow, Error};
 use async_channel::{self, Receiver, Sender};
 use futures::{future::BoxFuture, prelude::*};
 use libp2p_core::{
@@ -16,7 +15,7 @@ use std::{
 use tracing::debug;
 
 use crate::connection::{Connection, InnerConnection, PendingConnection};
-use crate::error::NymTransportError;
+use crate::error::Error;
 use crate::message::{
     ConnectionId, ConnectionMessage, InboundMessage, Message, OutboundMessage, TransportMessage,
 };
@@ -42,10 +41,10 @@ pub struct NymTransport {
     outbound_tx: Sender<OutboundMessage>,
 
     /// inbound messages for Transport.poll()
-    poll_rx: Receiver<TransportEvent<Upgrade, NymTransportError>>,
+    poll_rx: Receiver<TransportEvent<Upgrade, Error>>,
 
     /// outbound messages to Transport.poll()
-    poll_tx: Sender<TransportEvent<Upgrade, NymTransportError>>,
+    poll_tx: Sender<TransportEvent<Upgrade, Error>>,
 
     mixnet: Mixnet,
     waker: Option<Waker>,
@@ -62,8 +61,8 @@ impl NymTransport {
 
         #[allow(clippy::type_complexity)]
         let (poll_tx, poll_rx): (
-            Sender<TransportEvent<Upgrade, NymTransportError>>,
-            Receiver<TransportEvent<Upgrade, NymTransportError>>,
+            Sender<TransportEvent<Upgrade, Error>>,
+            Receiver<TransportEvent<Upgrade, Error>>,
         ) = async_channel::unbounded();
 
         poll_tx
@@ -71,7 +70,8 @@ impl NymTransport {
                 listener_id,
                 listen_addr: listen_addr.clone(),
             })
-            .await?;
+            .await
+            .map_err(|_| Error::SendErrorTransportEvent)?;
 
         Ok(Self {
             self_address,
@@ -93,13 +93,11 @@ impl NymTransport {
     fn handle_connection_response(&mut self, msg: ConnectionMessage) -> Result<(), Error> {
         let pending_conn = self.pending_dials.get(&msg.id);
         if pending_conn.is_none() {
-            return Err(anyhow!("no connection found for ConnectionRespone"));
+            return Err(Error::NoConnectionForResponse);
         }
 
         if self.connections.contains_key(&msg.id) {
-            return Err(anyhow!(
-                "received ConnectionResponse but connection was already established"
-            ));
+            return Err(Error::ConnectionAlreadyEstablished);
         }
 
         let pending_conn = pending_conn.unwrap();
@@ -121,17 +119,12 @@ impl NymTransport {
     /// connection response, and finally completes the upgrade into a Connection.
     fn handle_connection_request(&mut self, msg: ConnectionMessage) -> Result<Connection, Error> {
         if msg.recipient.is_none() {
-            return Err(anyhow!(
-                "received None recipient in ConnectionRequest: {:?}",
-                msg
-            ));
+            return Err(Error::NoneRecipientInConnectionRequest);
         }
 
         // ensure we don't already have a conn with the same id
         if self.connections.get(&msg.id).is_some() {
-            return Err(anyhow!(
-                "cannot handle connection request; already have connection with given ID"
-            ));
+            return Err(Error::ConnectionIDExists);
         }
 
         let (conn, inner_conn) =
@@ -158,7 +151,7 @@ impl NymTransport {
 
     fn handle_transport_message(&mut self, msg: TransportMessage) -> Result<(), Error> {
         if self.connections.get(&msg.id).is_none() {
-            return Err(anyhow!("no connection found for TransportMessage"));
+            return Err(Error::NoConnectionForTransportMessage);
         }
 
         debug!("got TransportMessage: {:?}", msg);
@@ -224,10 +217,7 @@ impl Stream for NymTransport {
                             )));
                         }
                         Err(e) => {
-                            return Poll::Ready(Some(Err(anyhow!(
-                                "failed to handle incoming ConnectionRequest: {:?}",
-                                e
-                            ))))
+                            return Poll::Ready(Some(Err(e)));
                         }
                     }
                 }
@@ -240,10 +230,7 @@ impl Stream for NymTransport {
                             )));
                         }
                         Err(e) => {
-                            return Poll::Ready(Some(Err(anyhow!(
-                                "failed to handle incoming ConnectionResponse: {:?}",
-                                e
-                            ))))
+                            return Poll::Ready(Some(Err(e)));
                         }
                     }
                 }
@@ -254,10 +241,7 @@ impl Stream for NymTransport {
                             return Poll::Ready(Some(Ok(InboundTransportEvent::TransportMessage)));
                         }
                         Err(e) => {
-                            return Poll::Ready(Some(Err(anyhow!(
-                                "failed to handle incoming TransportMessage: {:?}",
-                                e
-                            ))))
+                            return Poll::Ready(Some(Err(e)));
                         }
                     }
                 }
@@ -282,7 +266,7 @@ impl Upgrade {
 }
 
 impl Future for Upgrade {
-    type Output = Result<Connection, NymTransportError>;
+    type Output = Result<Connection, Error>;
 
     // poll checks if the upgrade has turned into a connection yet
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -293,13 +277,13 @@ impl Future for Upgrade {
 
 impl Transport for NymTransport {
     type Output = Connection; // TODO: this probably needs to be (PeerId, Connection)
-    type Error = NymTransportError;
+    type Error = Error;
     type ListenerUpgrade = Upgrade;
     type Dial = BoxFuture<'static, Result<Self::Output, Self::Error>>;
 
     fn listen_on(&mut self, _: Multiaddr) -> Result<ListenerId, TransportError<Self::Error>> {
         // we should only allow listening on the multiaddress containing our Nym address
-        Err(TransportError::Other(NymTransportError::Unimplemented))
+        Err(TransportError::Other(Error::Unimplemented))
     }
 
     fn remove_listener(&mut self, id: ListenerId) -> bool {
@@ -328,8 +312,7 @@ impl Transport for NymTransport {
         let id = ConnectionId::generate();
 
         // create remote recipient address
-        let recipient = multiaddress_to_nym_address(addr)
-            .map_err(|e| TransportError::Other(NymTransportError::Other(e)))?;
+        let recipient = multiaddress_to_nym_address(addr).map_err(TransportError::Other)?;
 
         // create pending conn structs and store
         let (connection_tx, connection_rx): (Sender<Connection>, Receiver<Connection>) =
@@ -354,17 +337,14 @@ impl Transport for NymTransport {
                     recipient,
                 })
                 .await
-                .map_err(|e| NymTransportError::Other(anyhow!(e)))?;
+                .map_err(|e| Error::OutboundSendError(e.to_string()))?;
 
             debug!("sent outbound ConnectionRequest");
             if let Some(waker) = waker.take() {
                 waker.wake();
             };
 
-            let conn = connection_rx
-                .recv()
-                .await
-                .map_err(|e| NymTransportError::Other(anyhow!(e)))?;
+            let conn = connection_rx.recv().await.map_err(Error::RecvError)?;
             Ok(conn)
         }
         .boxed())
@@ -375,7 +355,7 @@ impl Transport for NymTransport {
         &mut self,
         _addr: Multiaddr,
     ) -> Result<Self::Dial, TransportError<Self::Error>> {
-        Err(TransportError::Other(NymTransportError::Unimplemented))
+        Err(TransportError::Other(Error::Unimplemented))
     }
 
     fn poll(
@@ -415,7 +395,7 @@ impl Transport for NymTransport {
                 Err(e) => {
                     return Poll::Ready(TransportEvent::ListenerError {
                         listener_id: self.listener_id,
-                        error: NymTransportError::Other(e),
+                        error: e,
                     });
                 }
             };
@@ -431,14 +411,14 @@ impl Transport for NymTransport {
 }
 
 fn nym_address_to_multiaddress(addr: Recipient) -> Result<Multiaddr, Error> {
-    Multiaddr::from_str(&format!("/nym/{}", addr)).map_err(|e| anyhow!(e))
+    Multiaddr::from_str(&format!("/nym/{}", addr)).map_err(Error::FailedToFormatMultiaddr)
 }
 
 fn multiaddress_to_nym_address(multiaddr: Multiaddr) -> Result<Recipient, Error> {
     let mut multiaddr = multiaddr;
     match multiaddr.pop().unwrap() {
-        Protocol::Nym(addr) => Recipient::from_str(&addr).map_err(|e| anyhow!(e)),
-        _ => Err(anyhow!("unexpected protocol in multiaddress")),
+        Protocol::Nym(addr) => Recipient::from_str(&addr).map_err(Error::InvalidRecipientBytes),
+        _ => Err(Error::InvalidProtocolForMultiaddr),
     }
 }
 

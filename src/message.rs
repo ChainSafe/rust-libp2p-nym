@@ -1,8 +1,7 @@
-use anyhow::{anyhow, Error};
 use nym_sphinx::addressing::clients::Recipient;
 use rand_core::{OsRng, RngCore};
 
-use crate::error::NymTransportError;
+use crate::error::Error;
 
 const RECIPIENT_LENGTH: usize = Recipient::LEN;
 const CONNECTION_ID_LENGTH: usize = 32;
@@ -53,14 +52,14 @@ pub(crate) struct TransportMessage {
 impl Message {
     fn try_from_bytes(bytes: Vec<u8>) -> Result<Self, Error> {
         if bytes.len() < 2 {
-            return Err(anyhow!(NymTransportError::InvalidMessageBytes));
+            return Err(Error::InvalidMessageBytes);
         }
 
         Ok(match bytes[0] {
             0 => Message::ConnectionRequest(ConnectionMessage::try_from_bytes(&bytes[1..])?),
             1 => Message::ConnectionResponse(ConnectionMessage::try_from_bytes(&bytes[1..])?),
             2 => Message::TransportMessage(TransportMessage::try_from_bytes(&bytes[1..])?),
-            _ => return Err(anyhow!(NymTransportError::InvalidMessageBytes)),
+            _ => return Err(Error::InvalidMessageBytes),
         })
     }
 }
@@ -80,7 +79,7 @@ impl ConnectionMessage {
 
     fn try_from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         if bytes.len() < CONNECTION_ID_LENGTH + 1 {
-            return Err(anyhow!("failed to decode ConnectionMessage; too short"));
+            return Err(Error::ConnectionMessageBytesTooShort);
         }
 
         let id = ConnectionId::from_bytes(&bytes[0..CONNECTION_ID_LENGTH]);
@@ -88,17 +87,20 @@ impl ConnectionMessage {
             0u8 => None,
             1u8 => {
                 if bytes.len() < CONNECTION_ID_LENGTH + 1 + RECIPIENT_LENGTH {
-                    return Err(anyhow!("failed to decode ConnectionMessage; no recipient"));
+                    return Err(Error::ConnectionMessageBytesNoRecipient);
                 }
 
                 let mut recipient_bytes = [0u8; RECIPIENT_LENGTH];
                 recipient_bytes[..].copy_from_slice(
                     &bytes[CONNECTION_ID_LENGTH + 1..CONNECTION_ID_LENGTH + 1 + RECIPIENT_LENGTH],
                 );
-                Some(Recipient::try_from_bytes(recipient_bytes)?)
+                Some(
+                    Recipient::try_from_bytes(recipient_bytes)
+                        .map_err(Error::InvalidRecipientBytes)?,
+                )
             }
             _ => {
-                return Err(anyhow!("invalid recipient prefix byte"));
+                return Err(Error::InvalidRecipientPrefixByte);
             }
         };
         Ok(ConnectionMessage { recipient, id })
@@ -114,7 +116,7 @@ impl TransportMessage {
 
     fn try_from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         if bytes.len() < CONNECTION_ID_LENGTH {
-            return Err(anyhow!("failed to decode TransportMessage; too short"));
+            return Err(Error::TransportMessageBytesTooShort);
         }
 
         let id = ConnectionId::from_bytes(&bytes[0..CONNECTION_ID_LENGTH]);
@@ -145,8 +147,10 @@ impl Message {
     }
 }
 
+/// InboundMessage represents an inbound mixnet message.
 pub(crate) struct InboundMessage(pub(crate) Message);
 
+/// OutboundMessage represents an outbound mixnet message.
 pub(crate) struct OutboundMessage {
     pub(crate) message: Message,
     pub(crate) recipient: Recipient,
@@ -154,7 +158,7 @@ pub(crate) struct OutboundMessage {
 
 pub(crate) fn parse_message_data(data: &[u8]) -> Result<InboundMessage, Error> {
     if data.len() < 2 {
-        return Err(anyhow!(NymTransportError::InvalidMessageBytes));
+        return Err(Error::InvalidMessageBytes);
     }
     let msg = Message::try_from_bytes(data.to_vec())?;
     Ok(InboundMessage(msg))

@@ -1,4 +1,3 @@
-use anyhow::{anyhow, Error};
 use async_channel::{self, Receiver, Sender};
 use futures::{future::Future, FutureExt, SinkExt, StreamExt};
 use nym_sphinx::addressing::clients::Recipient;
@@ -11,6 +10,7 @@ use tokio_tungstenite::{
 };
 use tracing::debug;
 
+use crate::error::Error;
 use crate::message::*;
 
 /// Mixnet implements a read/write connection to a Nym websockets endpoint.
@@ -31,7 +31,9 @@ impl Mixnet {
     pub(crate) async fn new(
         uri: &String,
     ) -> Result<(Mixnet, Receiver<InboundMessage>, Sender<OutboundMessage>), Error> {
-        let (ws_stream, _) = connect_async(uri).await.map_err(|e| anyhow!(e))?;
+        let (ws_stream, _) = connect_async(uri)
+            .await
+            .map_err(Error::WebsocketStreamError)?;
         let (inbound_tx, inbound_rx): (Sender<InboundMessage>, Receiver<InboundMessage>) =
             async_channel::unbounded();
         let (outbound_tx, outbound_rx): (Sender<OutboundMessage>, Receiver<OutboundMessage>) =
@@ -48,9 +50,7 @@ impl Mixnet {
     }
 
     pub(crate) async fn get_self_address(&mut self) -> Result<Recipient, Error> {
-        let recipient = get_self_address(&mut self.ws_stream)
-            .await
-            .map_err(|e| anyhow!(e))?;
+        let recipient = get_self_address(&mut self.ws_stream).await?;
         Ok(recipient)
     }
 
@@ -59,7 +59,7 @@ impl Mixnet {
         self.ws_stream
             .close(None)
             .await
-            .map_err(|e| anyhow!("failed to close: {:?}", e))
+            .map_err(Error::WebsocketStreamError)
     }
 
     async fn check_inbound(&mut self) -> Result<(), Error> {
@@ -67,26 +67,28 @@ impl Mixnet {
             debug!("got inbound message from mixnet: {:?}", res);
             match res {
                 Ok(msg) => return self.handle_inbound(msg).await,
-                Err(e) => return Err(anyhow!(e)),
+                Err(e) => return Err(Error::WebsocketStreamError(e)),
             }
         }
 
-        Err(anyhow!("ws_stream returned None"))
+        Err(Error::WebsocketStreamReadNone)
     }
 
     async fn handle_inbound(&self, msg: Message) -> Result<(), Error> {
-        let res = parse_nym_message(msg)
-            .map_err(|e| anyhow!("received unknown message: error {:?}", e))?;
+        let res = parse_nym_message(msg)?;
         let msg_bytes = match res {
             ServerResponse::Received(msg_bytes) => {
                 debug!("received request {:?}", msg_bytes);
                 msg_bytes
             }
-            ServerResponse::Error(err) => return Err(anyhow!(err)),
-            _ => return Err(anyhow!("received {:?} unexpectedly", res)),
+            ServerResponse::Error(e) => return Err(Error::NymMessageError(e.to_string())),
+            _ => return Err(Error::UnexpectedNymMessage),
         };
-        let data = parse_message_data(&msg_bytes.message).map_err(|e| anyhow!(e))?;
-        self.inbound_tx.send(data).await.map_err(|e| anyhow!(e))
+        let data = parse_message_data(&msg_bytes.message)?;
+        self.inbound_tx
+            .send(data)
+            .await
+            .map_err(|e| Error::InboundSendError(e.to_string()))
     }
 
     async fn check_outbound(&mut self) -> Result<(), Error> {
@@ -95,7 +97,7 @@ impl Mixnet {
                 self.write_bytes(message.recipient, &message.message.to_bytes())
                     .await
             }
-            Err(e) => Err(anyhow!(e)),
+            Err(e) => Err(Error::RecvError(e)),
         }
     }
 
@@ -109,7 +111,7 @@ impl Mixnet {
         self.ws_stream
             .send(Message::Binary(nym_packet.serialize()))
             .await
-            .map_err(|e| anyhow!("failed to send packet: {:?}", e))?;
+            .map_err(Error::WebsocketStreamError)?;
 
         debug!(
             "wrote message to mixnet: recipient: {:?}",
@@ -145,13 +147,11 @@ async fn get_self_address(
     ws_stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
 ) -> Result<Recipient, Error> {
     let self_address_request = ClientRequest::SelfAddress.serialize();
-    let response = send_message_and_get_response(ws_stream, self_address_request)
-        .await
-        .map_err(|e| anyhow!(e))?;
+    let response = send_message_and_get_response(ws_stream, self_address_request).await?;
     match response {
         ServerResponse::SelfAddress(recipient) => Ok(*recipient),
-        ServerResponse::Error(e) => Err(anyhow!(e)),
-        _ => Err(anyhow!("received an unexpected response: {:?}", response)),
+        ServerResponse::Error(e) => Err(Error::NymMessageError(e.to_string())),
+        _ => Err(Error::UnexpectedSelfAddressResponse),
     }
 }
 
@@ -162,18 +162,23 @@ async fn send_message_and_get_response(
     ws_stream
         .send(Message::Binary(req))
         .await
-        .map_err(|e| anyhow!(e))?;
-    let raw_message = ws_stream.next().await.unwrap().map_err(|e| anyhow!(e))?;
+        .map_err(Error::WebsocketStreamError)?;
+    let raw_message = ws_stream
+        .next()
+        .await
+        .unwrap()
+        .map_err(Error::WebsocketStreamError)?;
     parse_nym_message(raw_message)
 }
 
 fn parse_nym_message(msg: Message) -> Result<ServerResponse, Error> {
     match msg {
         Message::Text(str) => ServerResponse::deserialize(&str.into_bytes())
-            .map_err(|e| anyhow!("failed to deserialize text message: {:?}", e)),
-        Message::Binary(bytes) => ServerResponse::deserialize(&bytes)
-            .map_err(|e| anyhow!("failed to deserialize binary message: {:?}", e)),
-        _ => Err(anyhow!("unknown message")),
+            .map_err(|e| Error::NymMessageError(e.to_string())),
+        Message::Binary(bytes) => {
+            ServerResponse::deserialize(&bytes).map_err(|e| Error::NymMessageError(e.to_string()))
+        }
+        _ => Err(Error::UnknownNymMessage),
     }
 }
 
