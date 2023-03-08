@@ -1,4 +1,3 @@
-use async_channel::RecvError;
 use libp2p_core::multiaddr;
 use nym_sphinx::addressing::clients::RecipientFormattingError;
 use tokio_tungstenite::tungstenite::Error as WsError;
@@ -45,12 +44,16 @@ pub enum Error {
     InvalidRecipientPrefixByte,
     #[error("failed to decode TransportMessage; too short")]
     TransportMessageBytesTooShort,
-    #[error("recv error")]
-    RecvError(#[from] RecvError),
+    #[error("recv error: channel closed")]
+    OneshotRecvError(#[from] tokio::sync::oneshot::error::RecvError),
+    #[error("recv error: channel closed")]
+    RecvError,
     #[error("outbound send error")]
     OutboundSendError(String),
     #[error("inbound send error")]
     InboundSendError(String),
+    #[error("failed to send new connection; receiver dropped")]
+    ConnectionSendError,
     #[error("failed to send initial TransportEvent::NewAddress")]
     SendErrorTransportEvent,
 }

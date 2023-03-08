@@ -1,10 +1,12 @@
-use async_channel::{self, Receiver, Sender};
 use futures::{future::Future, FutureExt, SinkExt, StreamExt};
 use nym_sphinx::addressing::clients::Recipient;
 use nym_websocket::{requests::ClientRequest, responses::ServerResponse};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::net::TcpStream;
+use tokio::{
+    net::TcpStream,
+    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+};
 use tokio_tungstenite::{
     connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
 };
@@ -20,24 +22,29 @@ pub(crate) struct Mixnet {
 
     /// a channel of inbound messages from the endpoint.
     /// the transport reads from (listens) to the receiver of this channel.
-    inbound_tx: Sender<InboundMessage>,
+    inbound_tx: UnboundedSender<InboundMessage>,
 
     /// a channel of outbound messages to be written to the endpoint.
     /// the transport writes to the sender of this channel.
-    outbound_rx: Receiver<OutboundMessage>,
+    outbound_rx: UnboundedReceiver<OutboundMessage>,
 }
 
 impl Mixnet {
     pub(crate) async fn new(
         uri: &String,
-    ) -> Result<(Mixnet, Receiver<InboundMessage>, Sender<OutboundMessage>), Error> {
+    ) -> Result<
+        (
+            Mixnet,
+            UnboundedReceiver<InboundMessage>,
+            UnboundedSender<OutboundMessage>,
+        ),
+        Error,
+    > {
         let (ws_stream, _) = connect_async(uri)
             .await
             .map_err(Error::WebsocketStreamError)?;
-        let (inbound_tx, inbound_rx): (Sender<InboundMessage>, Receiver<InboundMessage>) =
-            async_channel::unbounded();
-        let (outbound_tx, outbound_rx): (Sender<OutboundMessage>, Receiver<OutboundMessage>) =
-            async_channel::unbounded();
+        let (inbound_tx, inbound_rx) = unbounded_channel::<InboundMessage>();
+        let (outbound_tx, outbound_rx) = unbounded_channel::<OutboundMessage>();
         Ok((
             Mixnet {
                 ws_stream,
@@ -87,17 +94,16 @@ impl Mixnet {
         let data = parse_message_data(&msg_bytes.message)?;
         self.inbound_tx
             .send(data)
-            .await
             .map_err(|e| Error::InboundSendError(e.to_string()))
     }
 
     async fn check_outbound(&mut self) -> Result<(), Error> {
         match self.outbound_rx.recv().await {
-            Ok(message) => {
+            Some(message) => {
                 self.write_bytes(message.recipient, &message.message.to_bytes())
                     .await
             }
-            Err(e) => Err(Error::RecvError(e)),
+            None => Err(Error::RecvError),
         }
     }
 
@@ -190,7 +196,7 @@ mod test {
     #[tokio::test]
     async fn test_mixnet_poll_inbound_and_outbound() {
         let uri = "ws://localhost:1977".to_string();
-        let (mut mixnet, inbound_rx, outbound_tx) = Mixnet::new(&uri).await.unwrap();
+        let (mut mixnet, mut inbound_rx, outbound_tx) = Mixnet::new(&uri).await.unwrap();
         let self_address = mixnet.get_self_address().await.unwrap();
         let msg_inner = "hello".as_bytes();
         let msg = Message::TransportMessage(TransportMessage {
@@ -205,7 +211,7 @@ mod test {
         };
 
         tokio::task::spawn(async move {
-            outbound_tx.send(out_msg).await.unwrap();
+            outbound_tx.send(out_msg).unwrap();
         });
 
         tokio::task::spawn(async move {

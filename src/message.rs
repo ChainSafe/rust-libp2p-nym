@@ -151,6 +151,7 @@ impl Message {
 pub(crate) struct InboundMessage(pub(crate) Message);
 
 /// OutboundMessage represents an outbound mixnet message.
+#[derive(Debug)]
 pub(crate) struct OutboundMessage {
     pub(crate) message: Message,
     pub(crate) recipient: Recipient,
