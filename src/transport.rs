@@ -62,7 +62,6 @@ impl NymTransport {
         let listen_addr = nym_address_to_multiaddress(self_address)?;
         let listener_id = ListenerId::new();
 
-        // #[allow(clippy::type_complexity)]
         let (poll_tx, poll_rx) = unbounded_channel::<TransportEvent<Upgrade, Error>>();
 
         poll_tx
