@@ -1,4 +1,9 @@
+use libp2p_core::{muxing::StreamMuxerEvent, StreamMuxer};
 use nym_sphinx::addressing::clients::Recipient;
+use std::{
+    pin::Pin,
+    task::{Context, Poll},
+};
 use tokio::sync::{
     mpsc::{UnboundedReceiver, UnboundedSender},
     oneshot,
@@ -6,6 +11,7 @@ use tokio::sync::{
 
 use crate::error::Error;
 use crate::message::{ConnectionId, Message, OutboundMessage, TransportMessage};
+use crate::substream::Substream;
 
 /// Connection represents the result of a connection setup process.
 #[derive(Debug)]
@@ -52,26 +58,50 @@ impl Connection {
     }
 }
 
+impl StreamMuxer for Connection {
+    type Substream = Substream;
+    type Error = Error;
+
+    fn poll_inbound(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<Self::Substream, Self::Error>> {
+        Poll::Ready(Err(Error::Unimplemented))
+    }
+
+    fn poll_outbound(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<Self::Substream, Self::Error>> {
+        Poll::Ready(Err(Error::Unimplemented))
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Err(Error::Unimplemented))
+    }
+
+    fn poll(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<StreamMuxerEvent, Self::Error>> {
+        Poll::Ready(Err(Error::Unimplemented))
+    }
+}
+
 /// InnerConnection is the transport's internal representation of
 /// a Connection; it contains channels that interact with the mixnet.
 #[allow(dead_code)] // TODO: remove later
 pub(crate) struct InnerConnection {
     pub(crate) remote_recipient: Recipient,
-    pub(crate) id: ConnectionId,
 
     /// receives messages from the mixnet and sends to the `Connection`
     pub(crate) inbound_tx: UnboundedSender<Vec<u8>>,
 }
 
 impl InnerConnection {
-    pub(crate) fn new(
-        remote_recipient: Recipient,
-        id: ConnectionId,
-        inbound_tx: UnboundedSender<Vec<u8>>,
-    ) -> Self {
+    pub(crate) fn new(remote_recipient: Recipient, inbound_tx: UnboundedSender<Vec<u8>>) -> Self {
         InnerConnection {
             remote_recipient,
-            id,
             inbound_tx,
         }
     }

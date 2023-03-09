@@ -108,6 +108,11 @@ impl NymTransport {
                 .send(conn)
                 .map_err(|_| Error::ConnectionSendError)?;
             self.connections.insert(msg.id, inner_conn);
+
+            if let Some(waker) = self.waker.take() {
+                waker.wake();
+            }
+
             Ok(())
         } else {
             Err(Error::NoConnectionForResponse)
@@ -141,6 +146,11 @@ impl NymTransport {
             .map_err(|e| Error::OutboundSendError(e.to_string()))?;
 
         self.connections.insert(msg.id, inner_conn);
+
+        if let Some(waker) = self.waker.take() {
+            waker.wake();
+        }
+
         Ok(conn)
     }
 
@@ -173,7 +183,7 @@ impl NymTransport {
         // "inner" representation of a connection; this is what we
         // read/write to when receiving messages on the mixnet,
         // or we get outbound messages from an application.
-        let inner_conn = InnerConnection::new(recipient, id, inbound_tx);
+        let inner_conn = InnerConnection::new(recipient, inbound_tx);
         (conn, inner_conn)
     }
 
@@ -184,10 +194,6 @@ impl NymTransport {
                 debug!("got connection request {:?}", inner);
                 match self.handle_connection_request(inner) {
                     Ok(conn) => {
-                        if let Some(waker) = self.waker.take() {
-                            waker.wake();
-                        };
-
                         let (connection_tx, connection_rx) = oneshot::channel::<Connection>();
                         let upgrade = Upgrade::new(connection_rx);
                         connection_tx
@@ -323,11 +329,6 @@ impl Transport for NymTransport {
             return Poll::Ready(res);
         }
 
-        // // loop for mixnet events
-        // while let Poll::Ready(res) = self.mixnet.poll_unpin(cx) {
-        //     debug!("got mixnet event: {:?}", res);
-        // }
-
         // check for and handle inbound messages
         while let Poll::Ready(Some(msg)) = self.inbound_stream.poll_next_unpin(cx) {
             match self.handle_inbound(msg.0) {
@@ -384,9 +385,16 @@ mod test {
     use futures::future::poll_fn;
     use libp2p_core::transport::{Transport, TransportEvent};
     use std::pin::Pin;
+    use tracing_subscriber::EnvFilter;
 
     #[tokio::test]
     async fn test_connection() {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
+            )
+            .init();
+
         let dialer_uri = "ws://localhost:1977".to_string();
         let mut dialer_transport = NymTransport::new(&dialer_uri).await.unwrap();
         let listener_uri = "ws://localhost:1978".to_string();
