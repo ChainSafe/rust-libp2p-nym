@@ -169,7 +169,7 @@ fn parse_nym_message(msg: Message) -> Result<ServerResponse, Error> {
 
 #[cfg(test)]
 mod test {
-    use crate::message::{self, ConnectionId, Message, TransportMessage};
+    use crate::message::{self, ConnectionId, Message, SubstreamMessage, TransportMessage};
     use crate::mixnet::initialize_mixnet;
 
     #[tokio::test]
@@ -180,7 +180,7 @@ mod test {
         let msg_inner = "hello".as_bytes();
         let msg = Message::TransportMessage(TransportMessage {
             id: ConnectionId::generate(),
-            message: msg_inner.to_vec(),
+            message: SubstreamMessage::new(0, msg_inner.to_vec()),
         });
 
         // send a message to ourselves through the mixnet
@@ -194,7 +194,8 @@ mod test {
         // receive the message from ourselves over the mixnet
         let received_msg = inbound_rx.recv().await.unwrap();
         if let Message::TransportMessage(recv_msg) = received_msg.0 {
-            assert_eq!(msg_inner, recv_msg.message);
+            assert_eq!(0, recv_msg.message.substream_id);
+            assert_eq!(msg_inner, recv_msg.message.message);
         } else {
             panic!("expected Message::TransportMessage")
         }

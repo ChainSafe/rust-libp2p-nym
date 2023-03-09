@@ -44,6 +44,8 @@ pub enum Error {
     InvalidRecipientPrefixByte,
     #[error("failed to decode TransportMessage; too short")]
     TransportMessageBytesTooShort,
+    #[error("invalid substream ID")]
+    InvalidSubstreamMessageBytes,
     #[error("recv error: channel closed")]
     OneshotRecvError(#[from] tokio::sync::oneshot::error::RecvError),
     #[error("recv error: channel closed")]

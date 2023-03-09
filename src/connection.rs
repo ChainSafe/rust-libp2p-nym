@@ -10,7 +10,7 @@ use tokio::sync::{
 };
 
 use crate::error::Error;
-use crate::message::{ConnectionId, Message, OutboundMessage, TransportMessage};
+use crate::message::{ConnectionId, Message, OutboundMessage, SubstreamMessage, TransportMessage};
 use crate::substream::Substream;
 
 /// Connection represents the result of a connection setup process.
@@ -20,9 +20,8 @@ pub struct Connection {
     remote_recipient: Recipient,
     id: ConnectionId,
 
-    // TODO: implement AsyncRead/AsyncWrite with the below channels
     /// receive messages from the `InnerConnection`
-    pub(crate) inbound_rx: UnboundedReceiver<Vec<u8>>,
+    pub(crate) inbound_rx: UnboundedReceiver<SubstreamMessage>,
 
     /// send messages to the mixnet
     pub(crate) outbound_tx: UnboundedSender<OutboundMessage>,
@@ -32,7 +31,7 @@ impl Connection {
     pub(crate) fn new(
         remote_recipient: Recipient,
         id: ConnectionId,
-        inbound_rx: UnboundedReceiver<Vec<u8>>,
+        inbound_rx: UnboundedReceiver<SubstreamMessage>,
         outbound_tx: UnboundedSender<OutboundMessage>,
     ) -> Self {
         Connection {
@@ -44,7 +43,7 @@ impl Connection {
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn write(&self, msg: Vec<u8>) -> Result<(), Error> {
+    pub(crate) async fn write(&self, msg: SubstreamMessage) -> Result<(), Error> {
         self.outbound_tx
             .send(OutboundMessage {
                 recipient: self.remote_recipient,
@@ -95,11 +94,14 @@ pub(crate) struct InnerConnection {
     pub(crate) remote_recipient: Recipient,
 
     /// receives messages from the mixnet and sends to the `Connection`
-    pub(crate) inbound_tx: UnboundedSender<Vec<u8>>,
+    pub(crate) inbound_tx: UnboundedSender<SubstreamMessage>,
 }
 
 impl InnerConnection {
-    pub(crate) fn new(remote_recipient: Recipient, inbound_tx: UnboundedSender<Vec<u8>>) -> Self {
+    pub(crate) fn new(
+        remote_recipient: Recipient,
+        inbound_tx: UnboundedSender<SubstreamMessage>,
+    ) -> Self {
         InnerConnection {
             remote_recipient,
             inbound_tx,

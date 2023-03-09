@@ -21,7 +21,8 @@ use tracing::debug;
 use crate::connection::{Connection, InnerConnection, PendingConnection};
 use crate::error::Error;
 use crate::message::{
-    ConnectionId, ConnectionMessage, InboundMessage, Message, OutboundMessage, TransportMessage,
+    ConnectionId, ConnectionMessage, InboundMessage, Message, OutboundMessage, SubstreamMessage,
+    TransportMessage,
 };
 use crate::mixnet::initialize_mixnet;
 
@@ -175,7 +176,7 @@ impl NymTransport {
         recipient: Recipient,
         id: ConnectionId,
     ) -> (Connection, InnerConnection) {
-        let (inbound_tx, inbound_rx) = unbounded_channel::<Vec<u8>>();
+        let (inbound_tx, inbound_rx) = unbounded_channel::<SubstreamMessage>();
 
         // "outer" representation of a connection; this contains channels for applications to read/write to.
         let conn = Connection::new(recipient, id.clone(), inbound_rx, self.outbound_tx.clone());
@@ -381,6 +382,8 @@ fn multiaddress_to_nym_address(multiaddr: Multiaddr) -> Result<Recipient, Error>
 
 #[cfg(test)]
 mod test {
+    use crate::message::SubstreamMessage;
+
     use super::{nym_address_to_multiaddress, NymTransport};
     use futures::future::poll_fn;
     use libp2p_core::transport::{Transport, TransportEvent};
@@ -468,20 +471,29 @@ mod test {
 
         // write a message from the dialer to the listener
         let msg_string = b"hello".to_vec();
-        dialer_conn.write(msg_string.clone()).await.unwrap();
+        dialer_conn
+            .write(SubstreamMessage::new(0, msg_string.clone()))
+            .await
+            .unwrap();
         let msg = listener_conn.inbound_rx.recv().await.unwrap();
-        assert_eq!(msg, msg_string);
+        assert_eq!(msg.message, msg_string);
 
         // write a message from the dialer to the listener again
         let msg_string = b"hi".to_vec();
-        dialer_conn.write(msg_string.clone()).await.unwrap();
+        dialer_conn
+            .write(SubstreamMessage::new(0, msg_string.clone()))
+            .await
+            .unwrap();
         let msg = listener_conn.inbound_rx.recv().await.unwrap();
-        assert_eq!(msg, msg_string);
+        assert_eq!(msg.message, msg_string);
 
         // write a message from the listener to the dialer
         let msg_string = b"world".to_vec();
-        listener_conn.write(msg_string.clone()).await.unwrap();
+        listener_conn
+            .write(SubstreamMessage::new(0, msg_string.clone()))
+            .await
+            .unwrap();
         let msg = dialer_conn.inbound_rx.recv().await.unwrap();
-        assert_eq!(msg, msg_string);
+        assert_eq!(msg.message, msg_string);
     }
 }

@@ -1,3 +1,5 @@
+use std::ops::Sub;
+
 use nym_sphinx::addressing::clients::Recipient;
 use rand_core::{OsRng, RngCore};
 
@@ -45,7 +47,7 @@ pub(crate) struct ConnectionMessage {
 /// TransportMessage is sent over a connection after establishment.
 #[derive(Default, Debug)]
 pub(crate) struct TransportMessage {
-    pub(crate) message: Vec<u8>,
+    pub(crate) message: SubstreamMessage,
     pub(crate) id: ConnectionId,
 }
 
@@ -110,7 +112,7 @@ impl ConnectionMessage {
 impl TransportMessage {
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = self.id.0.to_vec();
-        bytes.append(&mut self.message.clone());
+        bytes.extend_from_slice(&self.message.to_bytes());
         bytes
     }
 
@@ -120,8 +122,45 @@ impl TransportMessage {
         }
 
         let id = ConnectionId::from_bytes(&bytes[0..CONNECTION_ID_LENGTH]);
-        let message = bytes[CONNECTION_ID_LENGTH..].to_vec();
+        let message = SubstreamMessage::try_from_bytes(&bytes[CONNECTION_ID_LENGTH..])?;
         Ok(TransportMessage { message, id })
+    }
+}
+
+/// SubstreamMessage is a message sent over a substream.
+#[derive(Default, Debug)]
+pub(crate) struct SubstreamMessage {
+    pub(crate) substream_id: u64,
+    pub(crate) message: Vec<u8>,
+}
+
+impl SubstreamMessage {
+    pub(crate) fn new(substream_id: u64, message: Vec<u8>) -> Self {
+        SubstreamMessage {
+            substream_id,
+            message,
+        }
+    }
+
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = self.substream_id.to_be_bytes().to_vec();
+        bytes.extend_from_slice(&self.message);
+        bytes
+    }
+
+    pub(crate) fn try_from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        if bytes.len() < 8 {
+            return Err(Error::InvalidSubstreamMessageBytes);
+        }
+
+        let mut id_bytes = [0u8; 8];
+        id_bytes.copy_from_slice(&bytes[0..8]);
+        let substream_id = u64::from_be_bytes(id_bytes);
+
+        Ok(SubstreamMessage {
+            substream_id,
+            message: bytes[8..].to_vec(),
+        })
     }
 }
 
