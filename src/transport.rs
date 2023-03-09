@@ -23,7 +23,7 @@ use crate::error::Error;
 use crate::message::{
     ConnectionId, ConnectionMessage, InboundMessage, Message, OutboundMessage, TransportMessage,
 };
-use crate::mixnet::Mixnet;
+use crate::mixnet::initialize_mixnet;
 
 /// InboundTransportEvent represents an inbound event from the mixnet.
 pub enum InboundTransportEvent {
@@ -57,16 +57,12 @@ pub struct NymTransport {
     /// outbound messages to Transport.poll()
     poll_tx: UnboundedSender<TransportEvent<Upgrade, Error>>,
 
-    mixnet: Mixnet,
     waker: Option<Waker>,
 }
 
 impl NymTransport {
     pub async fn new(uri: &String) -> Result<Self, Error> {
-        // accept websocket uri and call Mixnet::new()
-        // then, cache our Nym address and create the listener for it
-        let (mut mixnet, inbound_rx, outbound_tx) = Mixnet::new(uri).await?;
-        let self_address = mixnet.get_self_address().await?;
+        let (self_address, inbound_rx, outbound_tx) = initialize_mixnet(uri).await?;
         let listen_addr = nym_address_to_multiaddress(self_address)?;
         let listener_id = ListenerId::new();
 
@@ -91,7 +87,6 @@ impl NymTransport {
             outbound_tx,
             poll_rx,
             poll_tx,
-            mixnet,
             waker: None,
         })
     }
@@ -328,10 +323,10 @@ impl Transport for NymTransport {
             return Poll::Ready(res);
         }
 
-        // loop for mixnet events
-        while let Poll::Ready(res) = self.mixnet.poll_unpin(cx) {
-            debug!("got mixnet event: {:?}", res);
-        }
+        // // loop for mixnet events
+        // while let Poll::Ready(res) = self.mixnet.poll_unpin(cx) {
+        //     debug!("got mixnet event: {:?}", res);
+        // }
 
         // check for and handle inbound messages
         while let Poll::Ready(Some(msg)) = self.inbound_stream.poll_next_unpin(cx) {
@@ -451,7 +446,7 @@ mod test {
             };
 
             tokio::task::spawn(async move {
-                // should send the response into the mixnet
+                // should send the connection response into the mixnet
                 poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).await;
             });
 
@@ -460,7 +455,25 @@ mod test {
         });
 
         println!("waiting for connections...");
-        let _dialer_conn = maybe_dialer_conn.await.unwrap();
-        let _listener_conn = maybe_listener_conn.await.unwrap();
+        let mut dialer_conn = maybe_dialer_conn.await.unwrap();
+        let mut listener_conn = maybe_listener_conn.await.unwrap();
+
+        // write a message from the dialer to the listener
+        let msg_string = b"hello".to_vec();
+        dialer_conn.write(msg_string.clone()).await.unwrap();
+        let msg = listener_conn.inbound_rx.recv().await.unwrap();
+        assert_eq!(msg, msg_string);
+
+        // write a message from the dialer to the listener again
+        let msg_string = b"hi".to_vec();
+        dialer_conn.write(msg_string.clone()).await.unwrap();
+        let msg = listener_conn.inbound_rx.recv().await.unwrap();
+        assert_eq!(msg, msg_string);
+
+        // write a message from the listener to the dialer
+        let msg_string = b"world".to_vec();
+        listener_conn.write(msg_string.clone()).await.unwrap();
+        let msg = dialer_conn.inbound_rx.recv().await.unwrap();
+        assert_eq!(msg, msg_string);
     }
 }
