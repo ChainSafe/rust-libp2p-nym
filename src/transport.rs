@@ -65,8 +65,8 @@ impl NymTransport {
     pub async fn new(uri: &String) -> Result<Self, Error> {
         // accept websocket uri and call Mixnet::new()
         // then, cache our Nym address and create the listener for it
-        let (mut mixnet, inbound_rx, outbound_tx) = Mixnet::new(uri).await?;
-        let self_address = mixnet.get_self_address().await?;
+        let (mut mixnet, self_address, inbound_rx, outbound_tx) = Mixnet::new(uri).await?;
+        // let self_address = mixnet.get_self_address().await?;
         let listen_addr = nym_address_to_multiaddress(self_address)?;
         let listener_id = ListenerId::new();
 
@@ -328,10 +328,10 @@ impl Transport for NymTransport {
             return Poll::Ready(res);
         }
 
-        // loop for mixnet events
-        while let Poll::Ready(res) = self.mixnet.poll_unpin(cx) {
-            debug!("got mixnet event: {:?}", res);
-        }
+        // // loop for mixnet events
+        // while let Poll::Ready(res) = self.mixnet.poll_unpin(cx) {
+        //     debug!("got mixnet event: {:?}", res);
+        // }
 
         // check for and handle inbound messages
         while let Poll::Ready(Some(msg)) = self.inbound_stream.poll_next_unpin(cx) {
