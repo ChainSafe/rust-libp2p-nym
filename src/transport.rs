@@ -23,7 +23,7 @@ use crate::error::Error;
 use crate::message::{
     ConnectionId, ConnectionMessage, InboundMessage, Message, OutboundMessage, TransportMessage,
 };
-use crate::mixnet::Mixnet;
+use crate::mixnet::initialize_mixnet;
 
 /// InboundTransportEvent represents an inbound event from the mixnet.
 pub enum InboundTransportEvent {
@@ -57,16 +57,12 @@ pub struct NymTransport {
     /// outbound messages to Transport.poll()
     poll_tx: UnboundedSender<TransportEvent<Upgrade, Error>>,
 
-    mixnet: Mixnet,
     waker: Option<Waker>,
 }
 
 impl NymTransport {
     pub async fn new(uri: &String) -> Result<Self, Error> {
-        // accept websocket uri and call Mixnet::new()
-        // then, cache our Nym address and create the listener for it
-        let (mut mixnet, self_address, inbound_rx, outbound_tx) = Mixnet::new(uri).await?;
-        // let self_address = mixnet.get_self_address().await?;
+        let (self_address, inbound_rx, outbound_tx) = initialize_mixnet(uri).await?;
         let listen_addr = nym_address_to_multiaddress(self_address)?;
         let listener_id = ListenerId::new();
 
@@ -91,7 +87,6 @@ impl NymTransport {
             outbound_tx,
             poll_rx,
             poll_tx,
-            mixnet,
             waker: None,
         })
     }
@@ -464,27 +459,21 @@ mod test {
         let mut listener_conn = maybe_listener_conn.await.unwrap();
 
         // write a message from the dialer to the listener
-        dialer_conn.write(b"hello".to_vec()).await.unwrap();
-        println!("sent hello from dialer to listener");
-
-        // read the message from the listener
+        let msg_string = b"hello".to_vec();
+        dialer_conn.write(msg_string.clone()).await.unwrap();
         let msg = listener_conn.inbound_rx.recv().await.unwrap();
-        assert_eq!(msg, b"hello".to_vec());
-        println!("🤨");
+        assert_eq!(msg, msg_string);
 
-        // write a message from the dialer to the listener
-        dialer_conn.write(b"hello".to_vec()).await.unwrap();
-        println!("sent hello from dialer to listener");
-
-        // read the message from the listener
+        // write a message from the dialer to the listener again
+        let msg_string = b"hi".to_vec();
+        dialer_conn.write(msg_string.clone()).await.unwrap();
         let msg = listener_conn.inbound_rx.recv().await.unwrap();
-        assert_eq!(msg, b"hello".to_vec());
-        println!("🤨");
+        assert_eq!(msg, msg_string);
 
-        listener_conn.write(b"world".to_vec()).await.unwrap();
-        println!("sent world from listener to dialer");
+        // write a message from the listener to the dialer
+        let msg_string = b"world".to_vec();
+        listener_conn.write(msg_string.clone()).await.unwrap();
         let msg = dialer_conn.inbound_rx.recv().await.unwrap();
-        assert_eq!(msg, b"world".to_vec());
-        println!("🤨");
+        assert_eq!(msg, msg_string);
     }
 }
