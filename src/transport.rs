@@ -15,6 +15,7 @@ use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     oneshot,
 };
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::debug;
 
 use crate::connection::{Connection, InnerConnection, PendingConnection};
@@ -23,6 +24,13 @@ use crate::message::{
     ConnectionId, ConnectionMessage, InboundMessage, Message, OutboundMessage, TransportMessage,
 };
 use crate::mixnet::Mixnet;
+
+/// InboundTransportEvent represents an inbound event from the mixnet.
+pub enum InboundTransportEvent {
+    ConnectionRequest(Upgrade),
+    ConnectionResponse,
+    TransportMessage,
+}
 
 /// NymTransport implements the Transport trait using the Nym mixnet.
 pub struct NymTransport {
@@ -38,7 +46,7 @@ pub struct NymTransport {
     pending_dials: HashMap<ConnectionId, PendingConnection>,
 
     /// inbound mixnet messages
-    inbound_rx: UnboundedReceiver<InboundMessage>,
+    inbound_stream: UnboundedReceiverStream<InboundMessage>,
 
     /// outbound mixnet messages
     outbound_tx: UnboundedSender<OutboundMessage>,
@@ -71,13 +79,15 @@ impl NymTransport {
             })
             .map_err(|_| Error::SendErrorTransportEvent)?;
 
+        let inbound_stream = UnboundedReceiverStream::new(inbound_rx);
+
         Ok(Self {
             self_address,
             listen_addr,
             listener_id,
             connections: HashMap::<ConnectionId, InnerConnection>::new(),
             pending_dials: HashMap::<ConnectionId, PendingConnection>::new(),
-            inbound_rx,
+            inbound_stream,
             outbound_tx,
             poll_rx,
             poll_tx,
@@ -105,7 +115,7 @@ impl NymTransport {
             self.connections.insert(msg.id, inner_conn);
             Ok(())
         } else {
-            return Err(Error::NoConnectionForResponse);
+            Err(Error::NoConnectionForResponse)
         }
     }
 
@@ -141,7 +151,6 @@ impl NymTransport {
 
     fn handle_transport_message(&self, msg: TransportMessage) -> Result<(), Error> {
         if let Some(conn) = self.connections.get(&msg.id) {
-            debug!("got TransportMessage: {:?}", msg);
             conn.inbound_tx
                 .send(msg.message)
                 .map_err(|e| Error::InboundSendError(e.to_string()))?;
@@ -152,7 +161,7 @@ impl NymTransport {
 
             Ok(())
         } else {
-            return Err(Error::NoConnectionForTransportMessage);
+            Err(Error::NoConnectionForTransportMessage)
         }
     }
 
@@ -172,73 +181,39 @@ impl NymTransport {
         let inner_conn = InnerConnection::new(recipient, id, inbound_tx);
         (conn, inner_conn)
     }
-}
 
-/// InboundTransportEvent represents an inbound event from the mixnet.
-pub enum InboundTransportEvent {
-    ConnectionRequest(Upgrade),
-    ConnectionResponse,
-    TransportMessage,
-}
+    /// handle_inbound handles an inbound message from the mixnet, received via self.inbound_stream.
+    fn handle_inbound(&mut self, msg: Message) -> Result<InboundTransportEvent, Error> {
+        match msg {
+            Message::ConnectionRequest(inner) => {
+                debug!("got connection request {:?}", inner);
+                match self.handle_connection_request(inner) {
+                    Ok(conn) => {
+                        if let Some(waker) = self.waker.take() {
+                            waker.wake();
+                        };
 
-impl Stream for NymTransport {
-    type Item = Result<InboundTransportEvent, Error>;
-
-    // poll_next polls for inbound messages from the mixnet
-    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // poll for inbound messages
-        if let Some(Some(msg)) = self.inbound_rx.recv().now_or_never() {
-            match msg.0 {
-                Message::ConnectionRequest(inner) => {
-                    debug!("got connection request {:?}", inner);
-                    match self.handle_connection_request(inner) {
-                        Ok(conn) => {
-                            if let Some(waker) = self.waker.take() {
-                                waker.wake();
-                            };
-
-                            let (connection_tx, connection_rx) = oneshot::channel::<Connection>();
-                            let upgrade = Upgrade::new(connection_rx);
-                            connection_tx
-                                .send(conn)
-                                .map_err(|_| Error::ConnectionSendError)?;
-                            return Poll::Ready(Some(Ok(
-                                InboundTransportEvent::ConnectionRequest(upgrade),
-                            )));
-                        }
-                        Err(e) => {
-                            return Poll::Ready(Some(Err(e)));
-                        }
+                        let (connection_tx, connection_rx) = oneshot::channel::<Connection>();
+                        let upgrade = Upgrade::new(connection_rx);
+                        connection_tx
+                            .send(conn)
+                            .map_err(|_| Error::ConnectionSendError)?;
+                        Ok(InboundTransportEvent::ConnectionRequest(upgrade))
                     }
+                    Err(e) => Err(e),
                 }
-                Message::ConnectionResponse(msg) => {
-                    debug!("got connection response {:?}", msg);
-                    match self.handle_connection_response(msg) {
-                        Ok(()) => {
-                            return Poll::Ready(Some(Ok(
-                                InboundTransportEvent::ConnectionResponse,
-                            )));
-                        }
-                        Err(e) => {
-                            return Poll::Ready(Some(Err(e)));
-                        }
-                    }
-                }
-                Message::TransportMessage(msg) => {
-                    // send to connection channel
-                    match self.handle_transport_message(msg) {
-                        Ok(()) => {
-                            return Poll::Ready(Some(Ok(InboundTransportEvent::TransportMessage)));
-                        }
-                        Err(e) => {
-                            return Poll::Ready(Some(Err(e)));
-                        }
-                    }
-                }
-            };
-        };
-
-        Poll::Pending
+            }
+            Message::ConnectionResponse(msg) => {
+                debug!("got connection response {:?}", msg);
+                self.handle_connection_response(msg)
+                    .map(|_| InboundTransportEvent::ConnectionResponse)
+            }
+            Message::TransportMessage(msg) => {
+                debug!("got TransportMessage: {:?}", msg);
+                self.handle_transport_message(msg)
+                    .map(|_| InboundTransportEvent::TransportMessage)
+            }
+        }
     }
 }
 
@@ -359,8 +334,8 @@ impl Transport for NymTransport {
         }
 
         // check for and handle inbound messages
-        while let Poll::Ready(Some(res)) = self.as_mut().poll_next(cx) {
-            match res {
+        while let Poll::Ready(Some(msg)) = self.inbound_stream.poll_next_unpin(cx) {
+            match self.handle_inbound(msg.0) {
                 Ok(event) => match event {
                     InboundTransportEvent::ConnectionRequest(upgrade) => {
                         debug!("InboundTransportEvent::ConnectionRequest");
