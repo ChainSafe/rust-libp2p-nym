@@ -89,27 +89,24 @@ impl NymTransport {
     // handle_connection_response resolves the pending connection corresponding to the response
     // (if there is one) into a Connection.
     fn handle_connection_response(&mut self, msg: ConnectionMessage) -> Result<(), Error> {
-        let pending_conn = self.pending_dials.remove(&msg.id);
-        if pending_conn.is_none() {
-            return Err(Error::NoConnectionForResponse);
-        }
-
         if self.connections.contains_key(&msg.id) {
             return Err(Error::ConnectionAlreadyEstablished);
         }
 
-        let pending_conn = pending_conn.unwrap();
+        if let Some(pending_conn) = self.pending_dials.remove(&msg.id) {
+            // resolve connection and put into pending_conn channel
+            let (conn, inner_conn) =
+                self.create_connection_types(pending_conn.remote_recipient, msg.id.clone());
 
-        // resolve connection and put into pending_conn channel
-        let (conn, inner_conn) =
-            self.create_connection_types(pending_conn.remote_recipient, msg.id.clone());
-
-        pending_conn
-            .connection_tx
-            .send(conn)
-            .map_err(|_| Error::ConnectionSendError)?;
-        self.connections.insert(msg.id, inner_conn);
-        Ok(())
+            pending_conn
+                .connection_tx
+                .send(conn)
+                .map_err(|_| Error::ConnectionSendError)?;
+            self.connections.insert(msg.id, inner_conn);
+            Ok(())
+        } else {
+            return Err(Error::NoConnectionForResponse);
+        }
     }
 
     /// handle_connection_request handles an incoming connection request, sends back a
@@ -143,21 +140,20 @@ impl NymTransport {
     }
 
     fn handle_transport_message(&self, msg: TransportMessage) -> Result<(), Error> {
-        if self.connections.get(&msg.id).is_none() {
+        if let Some(conn) = self.connections.get(&msg.id) {
+            debug!("got TransportMessage: {:?}", msg);
+            conn.inbound_tx
+                .send(msg.message)
+                .map_err(|e| Error::InboundSendError(e.to_string()))?;
+
+            if let Some(waker) = self.waker.clone().take() {
+                waker.wake();
+            }
+
+            Ok(())
+        } else {
             return Err(Error::NoConnectionForTransportMessage);
         }
-
-        debug!("got TransportMessage: {:?}", msg);
-        let conn = self.connections.get(&msg.id).unwrap();
-        conn.inbound_tx
-            .send(msg.message)
-            .map_err(|e| Error::InboundSendError(e.to_string()))?;
-
-        if let Some(waker) = self.waker.clone().take() {
-            waker.wake();
-        }
-
-        Ok(())
     }
 
     fn create_connection_types(
