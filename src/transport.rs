@@ -429,7 +429,7 @@ mod test {
 
         tokio::task::spawn(async move {
             // should send the connection request message and receive the response from the mixnet
-            let _res = poll_fn(|cx| Pin::new(&mut dialer_transport).as_mut().poll(cx)).await;
+            poll_fn(|cx| Pin::new(&mut dialer_transport).as_mut().poll(cx)).await;
         });
 
         let maybe_listener_conn = tokio::task::spawn(async move {
@@ -452,7 +452,7 @@ mod test {
 
             tokio::task::spawn(async move {
                 // should send the response into the mixnet
-                let _res = poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).await;
+                poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).await;
             });
 
             let listener_conn = upgrade.await.unwrap();

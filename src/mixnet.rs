@@ -153,28 +153,23 @@ async fn get_self_address(
     ws_stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
 ) -> Result<Recipient, Error> {
     let self_address_request = ClientRequest::SelfAddress.serialize();
-    let response = send_message_and_get_response(ws_stream, self_address_request).await?;
-    match response {
-        ServerResponse::SelfAddress(recipient) => Ok(*recipient),
-        ServerResponse::Error(e) => Err(Error::NymMessageError(e.to_string())),
-        _ => Err(Error::UnexpectedSelfAddressResponse),
-    }
-}
-
-async fn send_message_and_get_response(
-    ws_stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-    req: Vec<u8>,
-) -> Result<ServerResponse, Error> {
     ws_stream
-        .send(Message::Binary(req))
+        .send(Message::Binary(self_address_request))
         .await
         .map_err(Error::WebsocketStreamError)?;
-    let raw_message = ws_stream
-        .next()
-        .await
-        .unwrap()
-        .map_err(Error::WebsocketStreamError)?;
-    parse_nym_message(raw_message)
+    
+    // loop until we receive the SelfAddress respone, since the next message might not
+    // necessarily be the SelfAddress response.
+    while let Some(raw_message) = ws_stream.next().await {
+        let raw_message = raw_message.map_err(Error::WebsocketStreamError)?;
+        let response = parse_nym_message(raw_message)?;
+        return match response {
+            ServerResponse::SelfAddress(recipient) => Ok(*recipient),
+            ServerResponse::Error(e) => Err(Error::NymMessageError(e.to_string())),
+            _ => continue,
+        };
+    }
+    Err(Error::RecvError)
 }
 
 fn parse_nym_message(msg: Message) -> Result<ServerResponse, Error> {
@@ -210,9 +205,7 @@ mod test {
             recipient: self_address,
         };
 
-        tokio::task::spawn(async move {
-            outbound_tx.send(out_msg).unwrap();
-        });
+        outbound_tx.send(out_msg).unwrap();
 
         tokio::task::spawn(async move {
             mixnet.check_outbound().await.unwrap();
