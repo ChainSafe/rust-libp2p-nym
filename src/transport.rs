@@ -460,7 +460,31 @@ mod test {
         });
 
         println!("waiting for connections...");
-        let _dialer_conn = maybe_dialer_conn.await.unwrap();
-        let _listener_conn = maybe_listener_conn.await.unwrap();
+        let mut dialer_conn = maybe_dialer_conn.await.unwrap();
+        let mut listener_conn = maybe_listener_conn.await.unwrap();
+
+        // write a message from the dialer to the listener
+        dialer_conn.write(b"hello".to_vec()).await.unwrap();
+        println!("sent hello from dialer to listener");
+
+        // read the message from the listener
+        let msg = listener_conn.inbound_rx.recv().await.unwrap();
+        assert_eq!(msg, b"hello".to_vec());
+        println!("🤨");
+
+        // write a message from the dialer to the listener
+        dialer_conn.write(b"hello".to_vec()).await.unwrap();
+        println!("sent hello from dialer to listener");
+
+        // read the message from the listener
+        let msg = listener_conn.inbound_rx.recv().await.unwrap();
+        assert_eq!(msg, b"hello".to_vec());
+        println!("🤨");
+
+        listener_conn.write(b"world".to_vec()).await.unwrap();
+        println!("sent world from listener to dialer");
+        let msg = dialer_conn.inbound_rx.recv().await.unwrap();
+        assert_eq!(msg, b"world".to_vec());
+        println!("🤨");
     }
 }
