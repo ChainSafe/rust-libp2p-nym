@@ -176,7 +176,6 @@ mod test {
     async fn test_mixnet_poll_inbound_and_outbound() {
         let uri = "ws://localhost:1977".to_string();
         let (self_address, mut inbound_rx, outbound_tx) = initialize_mixnet(&uri).await.unwrap();
-        //let self_address = mixnet.get_self_address().await.unwrap();
         let msg_inner = "hello".as_bytes();
         let msg = Message::TransportMessage(TransportMessage {
             id: ConnectionId::generate(),

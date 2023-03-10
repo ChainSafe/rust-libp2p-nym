@@ -323,11 +323,6 @@ impl Transport for NymTransport {
             return Poll::Ready(res);
         }
 
-        // // loop for mixnet events
-        // while let Poll::Ready(res) = self.mixnet.poll_unpin(cx) {
-        //     debug!("got mixnet event: {:?}", res);
-        // }
-
         // check for and handle inbound messages
         while let Poll::Ready(Some(msg)) = self.inbound_stream.poll_next_unpin(cx) {
             match self.handle_inbound(msg.0) {
