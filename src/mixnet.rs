@@ -169,18 +169,21 @@ fn parse_nym_message(msg: Message) -> Result<ServerResponse, Error> {
 
 #[cfg(test)]
 mod test {
-    use crate::message::{self, ConnectionId, Message, SubstreamMessage, TransportMessage};
+    use crate::message::{
+        self, ConnectionId, Message, SubstreamId, SubstreamMessage, SubstreamMessageType,
+        TransportMessage,
+    };
     use crate::mixnet::initialize_mixnet;
 
     #[tokio::test]
     async fn test_mixnet_poll_inbound_and_outbound() {
         let uri = "ws://localhost:1977".to_string();
         let (self_address, mut inbound_rx, outbound_tx) = initialize_mixnet(&uri).await.unwrap();
-        //let self_address = mixnet.get_self_address().await.unwrap();
         let msg_inner = "hello".as_bytes();
+        let substream_id = SubstreamId::generate();
         let msg = Message::TransportMessage(TransportMessage {
             id: ConnectionId::generate(),
-            message: SubstreamMessage::new(0, msg_inner.to_vec()),
+            message: SubstreamMessage::new_with_data(substream_id.clone(), msg_inner.to_vec()),
         });
 
         // send a message to ourselves through the mixnet
@@ -194,8 +197,12 @@ mod test {
         // receive the message from ourselves over the mixnet
         let received_msg = inbound_rx.recv().await.unwrap();
         if let Message::TransportMessage(recv_msg) = received_msg.0 {
-            assert_eq!(0, recv_msg.message.substream_id);
-            assert_eq!(msg_inner, recv_msg.message.message);
+            assert_eq!(substream_id, recv_msg.message.substream_id);
+            if let SubstreamMessageType::Data(data) = recv_msg.message.message_type {
+                assert_eq!(msg_inner, data.as_slice());
+            } else {
+                panic!("expected SubstreamMessage::Data")
+            }
         } else {
             panic!("expected Message::TransportMessage")
         }

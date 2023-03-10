@@ -82,8 +82,8 @@ impl NymTransport {
             self_address,
             listen_addr,
             listener_id,
-            connections: HashMap::<ConnectionId, InnerConnection>::new(),
-            pending_dials: HashMap::<ConnectionId, PendingConnection>::new(),
+            connections: HashMap::new(),
+            pending_dials: HashMap::new(),
             inbound_stream,
             outbound_tx,
             poll_rx,
@@ -382,7 +382,10 @@ fn multiaddress_to_nym_address(multiaddr: Multiaddr) -> Result<Recipient, Error>
 
 #[cfg(test)]
 mod test {
-    use crate::message::SubstreamMessage;
+    use crate::{
+        message::{SubstreamId, SubstreamMessage, SubstreamMessageType},
+        substream,
+    };
 
     use super::{nym_address_to_multiaddress, NymTransport};
     use futures::future::poll_fn;
@@ -470,30 +473,52 @@ mod test {
         let mut listener_conn = maybe_listener_conn.await.unwrap();
 
         // write a message from the dialer to the listener
+        let substream_id = SubstreamId::generate();
         let msg_string = b"hello".to_vec();
         dialer_conn
-            .write(SubstreamMessage::new(0, msg_string.clone()))
+            .write(SubstreamMessage::new_with_data(
+                substream_id.clone(),
+                msg_string.clone(),
+            ))
             .await
             .unwrap();
         let msg = listener_conn.inbound_rx.recv().await.unwrap();
-        assert_eq!(msg.message, msg_string);
+        if let SubstreamMessageType::Data(data) = msg.message_type {
+            assert_eq!(data, msg_string);
+        } else {
+            panic!("expected data message");
+        }
 
         // write a message from the dialer to the listener again
         let msg_string = b"hi".to_vec();
         dialer_conn
-            .write(SubstreamMessage::new(0, msg_string.clone()))
+            .write(SubstreamMessage::new_with_data(
+                substream_id.clone(),
+                msg_string.clone(),
+            ))
             .await
             .unwrap();
         let msg = listener_conn.inbound_rx.recv().await.unwrap();
-        assert_eq!(msg.message, msg_string);
+        if let SubstreamMessageType::Data(data) = msg.message_type {
+            assert_eq!(data, msg_string);
+        } else {
+            panic!("expected data message");
+        }
 
         // write a message from the listener to the dialer
         let msg_string = b"world".to_vec();
         listener_conn
-            .write(SubstreamMessage::new(0, msg_string.clone()))
+            .write(SubstreamMessage::new_with_data(
+                substream_id,
+                msg_string.clone(),
+            ))
             .await
             .unwrap();
         let msg = dialer_conn.inbound_rx.recv().await.unwrap();
-        assert_eq!(msg.message, msg_string);
+        if let SubstreamMessageType::Data(data) = msg.message_type {
+            assert_eq!(data, msg_string);
+        } else {
+            panic!("expected data message");
+        }
     }
 }

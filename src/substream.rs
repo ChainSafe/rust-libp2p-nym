@@ -6,8 +6,25 @@ use std::{
     pin::Pin,
     task::{Context, Poll},
 };
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
-pub struct Substream {}
+#[derive(Debug)]
+pub struct Substream {
+    pub(crate) inbound_rx: UnboundedReceiver<Vec<u8>>,
+    outbound_tx: UnboundedSender<Vec<u8>>,
+}
+
+impl Substream {
+    pub fn new(
+        inbound_rx: UnboundedReceiver<Vec<u8>>,
+        outbound_tx: UnboundedSender<Vec<u8>>,
+    ) -> Self {
+        Substream {
+            inbound_rx,
+            outbound_tx,
+        }
+    }
+}
 
 impl AsyncRead for Substream {
     fn poll_read(
