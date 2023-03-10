@@ -117,7 +117,6 @@ mod test {
 
         // send message to ourselves over the mixnet
         substream.write(msg_inner).await.unwrap();
-        //Pin::new(&mut substream).poll_write(&mut Context::from_waker(&futures::task::noop_waker_ref()), msg_inner);
 
         // receive full message over the mixnet
         let recv_msg = mixnet_inbound_rx.recv().await.unwrap();
