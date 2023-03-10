@@ -1,8 +1,5 @@
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
-    }
-}
+pub(crate) mod connection;
+pub mod error;
+pub(crate) mod message;
+pub(crate) mod mixnet;
+pub mod transport;

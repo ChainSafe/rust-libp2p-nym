@@ -10,10 +10,24 @@ jobs:
     - uses: actions/checkout@v1
     - name: Install stable
       run: rustup toolchain install stable
+    - name: Install protoc
+      run: sudo apt-get install protobuf-compiler
+    - name: Clone Nym
+      uses: actions/checkout@v2
+      with:
+        repository: nymtech/nym
+        path: './nym'
+    - name: Build and run Nym
+      run: | 
+        cd nym && cargo build --release
+        ./target/release/nym-client init --id test0
+        ./target/release/nym-client run --id test0 &
+        ./target/release/nym-client init --id test1 --port 1978
+        ./target/release/nym-client run --id test1 &
     - name: Build
       run: cargo build --all
     - name: Run tests
-      run: cargo test --all
+      run: cargo test -- --test-threads=1
 
 
   fmt:
@@ -33,6 +47,8 @@ jobs:
     steps:
       - uses: actions/checkout@v1
       - run: rustup component add clippy
+      - name: Install protoc
+        run: sudo apt-get install protobuf-compiler
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
