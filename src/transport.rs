@@ -383,10 +383,7 @@ fn multiaddress_to_nym_address(multiaddr: Multiaddr) -> Result<Recipient, Error>
 
 #[cfg(test)]
 mod test {
-    use crate::{
-        message::{SubstreamId, SubstreamMessage, SubstreamMessageType},
-        substream,
-    };
+    use crate::message::{SubstreamId, SubstreamMessage, SubstreamMessageType};
 
     use super::{nym_address_to_multiaddress, NymTransport};
     use futures::future::poll_fn;

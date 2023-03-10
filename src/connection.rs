@@ -4,7 +4,7 @@ use nym_sphinx::addressing::clients::Recipient;
 use std::{
     collections::HashMap,
     pin::Pin,
-    task::{Context, Poll},
+    task::{Context, Poll, Waker},
 };
 use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
@@ -53,6 +53,9 @@ pub struct Connection {
     /// closed substream IDs; used in poll_close
     close_tx: UnboundedSender<SubstreamId>,
     close_rx: UnboundedReceiver<SubstreamId>,
+
+    waker: Option<Waker>,
+    outbound_waker: Option<Waker>,
 }
 
 impl Connection {
@@ -79,6 +82,8 @@ impl Connection {
             outbound_open_rx,
             close_tx,
             close_rx,
+            waker: None,
+            outbound_waker: None,
         }
     }
 
@@ -100,7 +105,13 @@ impl Connection {
     /// attempts to open a new stream over the connection; returns a future that resolves when the stream is established.
     pub fn new_stream(&mut self) -> Result<BoxFuture<'static, Result<(), Error>>, Error> {
         let substream_id = SubstreamId::generate();
+        self.new_stream_with_id(substream_id)
+    }
 
+    pub fn new_stream_with_id(
+        &mut self,
+        substream_id: SubstreamId,
+    ) -> Result<BoxFuture<'static, Result<(), Error>>, Error> {
         // send the substream open request that requests to open a substream with the given ID
         self.mixnet_outbound_tx
             .send(OutboundMessage {
@@ -117,6 +128,10 @@ impl Connection {
 
         let (tx, rx) = oneshot::channel::<Result<(), Error>>();
         self.pending_substreams_tx.insert(substream_id, tx);
+
+        if let Some(waker) = self.waker.take() {
+            waker.wake();
+        }
 
         // TODO: response timeout
         Ok(Box::pin(async move {
@@ -173,6 +188,7 @@ impl StreamMuxer for Connection {
             return Poll::Ready(Ok(substream));
         }
 
+        self.outbound_waker = Some(cx.waker().clone());
         Poll::Pending
     }
 
@@ -201,7 +217,7 @@ impl StreamMuxer for Connection {
                             message: Message::TransportMessage(TransportMessage {
                                 id: self.id.clone(),
                                 message: SubstreamMessage {
-                                    substream_id: msg.substream_id,
+                                    substream_id: msg.substream_id.clone(),
                                     message_type: SubstreamMessageType::OpenResponse,
                                 },
                             }),
@@ -212,12 +228,14 @@ impl StreamMuxer for Connection {
                     self.inbound_open_tx
                         .send(substream)
                         .map_err(|e| Error::InboundSendError(e.to_string()))?;
+
+                    debug!("new inbound substream: {:?}", &msg.substream_id);
                 }
                 SubstreamMessageType::OpenResponse => {
                     if let Some(pending_substream_tx) =
                         self.pending_substreams_tx.remove(&msg.substream_id)
                     {
-                        let substream = self.new_substream(msg.substream_id)?;
+                        let substream = self.new_substream(msg.substream_id.clone())?;
 
                         // send the substream to our own channel to be returned in poll_outbound
                         self.outbound_open_tx
@@ -228,14 +246,21 @@ impl StreamMuxer for Connection {
                         pending_substream_tx
                             .send(Ok(()))
                             .map_err(|_| Error::SubstreamSendError)?;
+
+                        debug!("new outbound substream: {:?}", &msg.substream_id);
                     } else {
                         debug!("no substream pending for ID: {:?}", &msg.substream_id);
+                    }
+
+                    if let Some(waker) = self.outbound_waker.take() {
+                        waker.wake();
                     }
                 }
                 SubstreamMessageType::Close => {
                     self.handle_close(msg.substream_id)?;
                 }
                 SubstreamMessageType::Data(data) => {
+                    println!("got SubstreamMessageType::Data");
                     if let Some(inbound_tx) = self.substream_inbound_txs.get_mut(&msg.substream_id)
                     {
                         inbound_tx
@@ -248,6 +273,8 @@ impl StreamMuxer for Connection {
             }
         }
 
+        // TODO: waker
+        self.waker = Some(cx.waker().clone());
         Poll::Pending
     }
 }
@@ -289,5 +316,133 @@ impl PendingConnection {
             remote_recipient,
             connection_tx,
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use futures::future::poll_fn;
+    use futures::{AsyncReadExt, AsyncWriteExt, FutureExt};
+    use tracing_subscriber::EnvFilter;
+
+    use super::*;
+    use crate::message::InboundMessage;
+    use crate::mixnet::initialize_mixnet;
+
+    async fn inbound_receive_and_send(
+        connection_id: ConnectionId,
+        mixnet_inbound_rx: &mut UnboundedReceiver<InboundMessage>,
+        inbound_tx: &UnboundedSender<SubstreamMessage>,
+    ) {
+        let recv_msg = mixnet_inbound_rx.recv().await.unwrap();
+        match recv_msg.0 {
+            Message::TransportMessage(TransportMessage { id, message: msg }) => {
+                assert_eq!(id, connection_id);
+                inbound_tx.send(msg).unwrap();
+            }
+            _ => panic!("unexpected message"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_connection_stream_muxer() {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
+            )
+            .init();
+
+        let sender_uri = "ws://localhost:1977".to_string();
+        let (sender_address, mut sender_mixnet_inbound_rx, sender_outbound_tx) =
+            initialize_mixnet(&sender_uri).await.unwrap();
+
+        let recipient_uri = "ws://localhost:1978".to_string();
+        let (recipient_address, mut recipient_mixnet_inbound_rx, recipient_outbound_tx) =
+            initialize_mixnet(&recipient_uri).await.unwrap();
+
+        let connection_id = ConnectionId::generate();
+
+        // send SubstreamMessage::OpenRequest to the remote peer
+        let (sender_inbound_tx, sender_inbound_rx) = unbounded_channel::<SubstreamMessage>();
+        let mut sender_connection = Connection::new(
+            recipient_address,
+            connection_id.clone(),
+            sender_inbound_rx,
+            sender_outbound_tx,
+        );
+        let (recipient_inbound_tx, recipient_inbound_rx) = unbounded_channel::<SubstreamMessage>();
+        let mut recipient_connection = Connection::new(
+            sender_address,
+            connection_id.clone(),
+            recipient_inbound_rx,
+            recipient_outbound_tx,
+        );
+
+        // send the substream OpenRequest to the mixnet
+        let substream_id = SubstreamId::generate();
+        let sender_stream_fut = sender_connection
+            .new_stream_with_id(substream_id.clone())
+            .unwrap();
+        assert!(sender_connection
+            .pending_substreams_tx
+            .contains_key(&substream_id));
+
+        // poll the recipient inbound stream; should receive the OpenRequest and create the substream
+        inbound_receive_and_send(
+            connection_id.clone(),
+            &mut recipient_mixnet_inbound_rx,
+            &recipient_inbound_tx,
+        )
+        .await;
+        poll_fn(|cx| Pin::new(&mut recipient_connection).as_mut().poll(cx)).now_or_never();
+
+        // poll recipient's poll_inbound to receive the substream
+        let maybe_recipient_substream = poll_fn(|cx| {
+            Pin::new(&mut recipient_connection)
+                .as_mut()
+                .poll_inbound(cx)
+        })
+        .now_or_never();
+        let mut recipient_substream = maybe_recipient_substream.unwrap().unwrap();
+
+        // poll sender's connection to receive the OpenResponse and send it to the Connection inbound channel
+        inbound_receive_and_send(
+            connection_id.clone(),
+            &mut sender_mixnet_inbound_rx,
+            &sender_inbound_tx,
+        )
+        .await;
+
+        // poll sender's poll_outbound to get the substream
+        poll_fn(|cx| Pin::new(&mut sender_connection).as_mut().poll(cx)).now_or_never();
+        let mut sender_substream =
+            poll_fn(|cx| Pin::new(&mut sender_connection).as_mut().poll_outbound(cx))
+                .await
+                .unwrap();
+        assert!(sender_connection.pending_substreams_tx.is_empty());
+        sender_stream_fut.await.unwrap();
+
+        // finally, write message to the substream
+        let data = b"hello world";
+        sender_substream.write_all(data).await.unwrap();
+
+        // receive message from the mixnet, push to the recipient Connection inbound channel
+        inbound_receive_and_send(
+            connection_id.clone(),
+            &mut recipient_mixnet_inbound_rx,
+            &recipient_inbound_tx,
+        )
+        .await;
+
+        // poll the sender's connection to send the msg from the connection inbound channel to the substream's
+        poll_fn(|cx| Pin::new(&mut sender_connection).as_mut().poll(cx)).now_or_never();
+
+        // poll the recipient's connection to read the msg from the mixnet and mux it into the substream
+        poll_fn(|cx| Pin::new(&mut recipient_connection).as_mut().poll(cx)).now_or_never();
+
+        let mut buf = [0u8; 11];
+        let n = recipient_substream.read(&mut buf).await.unwrap();
+        assert_eq!(n, 11);
+        assert_eq!(buf, data[..]);
     }
 }

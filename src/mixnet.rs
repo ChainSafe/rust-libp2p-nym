@@ -88,7 +88,7 @@ async fn handle_inbound(
     let res = parse_nym_message(msg)?;
     let msg_bytes = match res {
         ServerResponse::Received(msg_bytes) => {
-            debug!("received request {:?}", msg_bytes);
+            debug!("received message {:?}", msg_bytes);
             msg_bytes
         }
         ServerResponse::Error(e) => return Err(Error::NymMessageError(e.to_string())),
@@ -97,7 +97,9 @@ async fn handle_inbound(
     let data = parse_message_data(&msg_bytes.message)?;
     inbound_tx
         .send(data)
-        .map_err(|e| Error::InboundSendError(e.to_string()))
+        .map_err(|e| Error::InboundSendError(e.to_string()))?;
+    println!("wrote inbound msg to inbound_tx");
+    Ok(())
 }
 
 async fn check_outbound(
