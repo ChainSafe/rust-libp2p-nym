@@ -347,12 +347,6 @@ mod test {
 
     #[tokio::test]
     async fn test_connection_stream_muxer() {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
-            )
-            .init();
-
         let sender_uri = "ws://localhost:1977".to_string();
         let (sender_address, mut sender_mixnet_inbound_rx, sender_outbound_tx) =
             initialize_mixnet(&sender_uri).await.unwrap();
