@@ -8,7 +8,7 @@ const CONNECTION_ID_LENGTH: usize = 32;
 const SUBSTREAM_ID_LENGTH: usize = 32;
 
 /// ConnectionId is a unique, randomly-generated per-connection ID that's used to
-/// identity which connection a message belongs to.
+/// identify which connection a message belongs to.
 #[derive(Clone, Default, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ConnectionId([u8; 32]);
 
@@ -27,7 +27,7 @@ impl ConnectionId {
 }
 
 /// SubstreamId is a unique, randomly-generated per-substream ID that's used to
-/// identity which substream a message belongs to.
+/// identify which substream a message belongs to.
 #[derive(Clone, Default, Debug, Eq, Hash, PartialEq)]
 pub struct SubstreamId(pub(crate) [u8; 32]);
 
