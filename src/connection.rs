@@ -54,6 +54,7 @@ pub struct Connection {
     close_tx: UnboundedSender<SubstreamId>,
     close_rx: UnboundedReceiver<SubstreamId>,
 
+    // TODO: more wakers?
     waker: Option<Waker>,
     outbound_waker: Option<Waker>,
 }
@@ -273,7 +274,7 @@ impl StreamMuxer for Connection {
             }
         }
 
-        // TODO: waker
+        // TODO: where to wake?
         self.waker = Some(cx.waker().clone());
         Poll::Pending
     }
