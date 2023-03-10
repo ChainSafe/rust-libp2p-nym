@@ -3,10 +3,7 @@ name = "rust-libp2p-nym"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-async-channel = "1.8"
 futures = "0.3.26"
 libp2p-core = { git = "https://github.com/ChainSafe/rust-libp2p.git", rev = "e3440d25681df380c9f0f8cfdcfd5ecc0a4f2fb6" }
 nym-websocket = { package = "websocket-requests", git = "https://github.com/nymtech/nym" }
