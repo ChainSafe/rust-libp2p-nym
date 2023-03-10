@@ -29,7 +29,7 @@ impl ConnectionId {
 /// SubstreamId is a unique, randomly-generated per-substream ID that's used to
 /// identity which substream a message belongs to.
 #[derive(Clone, Default, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct SubstreamId(pub(crate) [u8; 32]);
+pub struct SubstreamId(pub(crate) [u8; 32]);
 
 impl SubstreamId {
     pub(crate) fn generate() -> Self {
@@ -193,10 +193,7 @@ impl SubstreamMessage {
             return Err(Error::InvalidSubstreamMessageBytes);
         }
 
-        let mut id_bytes = [0u8; SUBSTREAM_ID_LENGTH];
-        id_bytes.copy_from_slice(&bytes[0..SUBSTREAM_ID_LENGTH]);
-        let substream_id = SubstreamId(id_bytes);
-
+        let substream_id = SubstreamId::from_bytes(&bytes[0..SUBSTREAM_ID_LENGTH]);
         let message_type = match bytes[SUBSTREAM_ID_LENGTH] {
             0 => SubstreamMessageType::OpenRequest,
             1 => SubstreamMessageType::OpenResponse,

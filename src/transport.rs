@@ -179,7 +179,7 @@ impl NymTransport {
         let (inbound_tx, inbound_rx) = unbounded_channel::<SubstreamMessage>();
 
         // "outer" representation of a connection; this contains channels for applications to read/write to.
-        let conn = Connection::new(recipient, id.clone(), inbound_rx, self.outbound_tx.clone());
+        let conn = Connection::new(recipient, id, inbound_rx, self.outbound_tx.clone());
 
         // "inner" representation of a connection; this is what we
         // read/write to when receiving messages on the mixnet,
@@ -307,6 +307,7 @@ impl Transport for NymTransport {
                 waker.wake();
             };
 
+            // TODO: response timeout
             let conn = connection_rx.await.map_err(Error::OneshotRecvError)?;
             Ok(conn)
         }

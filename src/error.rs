@@ -2,6 +2,8 @@ use libp2p_core::multiaddr;
 use nym_sphinx::addressing::clients::RecipientFormattingError;
 use tokio_tungstenite::tungstenite::Error as WsError;
 
+use crate::message::SubstreamId;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("unimplemented")]
@@ -48,6 +50,8 @@ pub enum Error {
     InvalidSubstreamMessageBytes,
     #[error("invalid substream message type byte")]
     InvalidSubstreamMessageType,
+    #[error("substrean with given ID already exists")]
+    SubstreamIdExists(SubstreamId),
     #[error("recv error: channel closed")]
     OneshotRecvError(#[from] tokio::sync::oneshot::error::RecvError),
     #[error("failed to send new substream; receiver dropped")]
