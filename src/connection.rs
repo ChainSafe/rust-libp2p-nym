@@ -324,7 +324,6 @@ impl PendingConnection {
 mod test {
     use futures::future::poll_fn;
     use futures::{AsyncReadExt, AsyncWriteExt, FutureExt};
-    use tracing_subscriber::EnvFilter;
 
     use super::*;
     use crate::message::InboundMessage;

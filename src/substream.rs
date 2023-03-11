@@ -116,7 +116,7 @@ mod test {
         );
 
         // send message to ourselves over the mixnet
-        substream.write(msg_inner).await.unwrap();
+        substream.write_all(msg_inner).await.unwrap();
 
         // receive full message over the mixnet
         let recv_msg = mixnet_inbound_rx.recv().await.unwrap();
@@ -143,7 +143,7 @@ mod test {
 
         // read message from substream
         let mut buf = [0u8; 5];
-        substream.read(&mut buf).await.unwrap();
+        substream.read_exact(&mut buf).await.unwrap();
         assert_eq!(buf, msg_inner);
     }
 }
