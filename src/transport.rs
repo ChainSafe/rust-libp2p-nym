@@ -21,7 +21,8 @@ use tracing::debug;
 use crate::connection::{Connection, InnerConnection, PendingConnection};
 use crate::error::Error;
 use crate::message::{
-    ConnectionId, ConnectionMessage, InboundMessage, Message, OutboundMessage, TransportMessage,
+    ConnectionId, ConnectionMessage, InboundMessage, Message, OutboundMessage, SubstreamMessage,
+    TransportMessage,
 };
 use crate::mixnet::initialize_mixnet;
 
@@ -81,8 +82,8 @@ impl NymTransport {
             self_address,
             listen_addr,
             listener_id,
-            connections: HashMap::<ConnectionId, InnerConnection>::new(),
-            pending_dials: HashMap::<ConnectionId, PendingConnection>::new(),
+            connections: HashMap::new(),
+            pending_dials: HashMap::new(),
             inbound_stream,
             outbound_tx,
             poll_rx,
@@ -108,6 +109,11 @@ impl NymTransport {
                 .send(conn)
                 .map_err(|_| Error::ConnectionSendError)?;
             self.connections.insert(msg.id, inner_conn);
+
+            if let Some(waker) = self.waker.take() {
+                waker.wake();
+            }
+
             Ok(())
         } else {
             Err(Error::NoConnectionForResponse)
@@ -141,6 +147,11 @@ impl NymTransport {
             .map_err(|e| Error::OutboundSendError(e.to_string()))?;
 
         self.connections.insert(msg.id, inner_conn);
+
+        if let Some(waker) = self.waker.take() {
+            waker.wake();
+        }
+
         Ok(conn)
     }
 
@@ -165,15 +176,15 @@ impl NymTransport {
         recipient: Recipient,
         id: ConnectionId,
     ) -> (Connection, InnerConnection) {
-        let (inbound_tx, inbound_rx) = unbounded_channel::<Vec<u8>>();
+        let (inbound_tx, inbound_rx) = unbounded_channel::<SubstreamMessage>();
 
         // "outer" representation of a connection; this contains channels for applications to read/write to.
-        let conn = Connection::new(recipient, id.clone(), inbound_rx, self.outbound_tx.clone());
+        let conn = Connection::new(recipient, id, inbound_rx, self.outbound_tx.clone());
 
         // "inner" representation of a connection; this is what we
         // read/write to when receiving messages on the mixnet,
         // or we get outbound messages from an application.
-        let inner_conn = InnerConnection::new(recipient, id, inbound_tx);
+        let inner_conn = InnerConnection::new(recipient, inbound_tx);
         (conn, inner_conn)
     }
 
@@ -184,10 +195,6 @@ impl NymTransport {
                 debug!("got connection request {:?}", inner);
                 match self.handle_connection_request(inner) {
                     Ok(conn) => {
-                        if let Some(waker) = self.waker.take() {
-                            waker.wake();
-                        };
-
                         let (connection_tx, connection_rx) = oneshot::channel::<Connection>();
                         let upgrade = Upgrade::new(connection_rx);
                         connection_tx
@@ -300,6 +307,7 @@ impl Transport for NymTransport {
                 waker.wake();
             };
 
+            // TODO: response timeout
             let conn = connection_rx.await.map_err(Error::OneshotRecvError)?;
             Ok(conn)
         }
@@ -375,13 +383,22 @@ fn multiaddress_to_nym_address(multiaddr: Multiaddr) -> Result<Recipient, Error>
 
 #[cfg(test)]
 mod test {
+    use crate::message::{SubstreamId, SubstreamMessage, SubstreamMessageType};
+
     use super::{nym_address_to_multiaddress, NymTransport};
     use futures::future::poll_fn;
     use libp2p_core::transport::{Transport, TransportEvent};
     use std::pin::Pin;
+    use tracing_subscriber::EnvFilter;
 
     #[tokio::test]
     async fn test_connection() {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
+            )
+            .init();
+
         let dialer_uri = "ws://localhost:1977".to_string();
         let mut dialer_transport = NymTransport::new(&dialer_uri).await.unwrap();
         let listener_uri = "ws://localhost:1978".to_string();
@@ -454,21 +471,52 @@ mod test {
         let mut listener_conn = maybe_listener_conn.await.unwrap();
 
         // write a message from the dialer to the listener
+        let substream_id = SubstreamId::generate();
         let msg_string = b"hello".to_vec();
-        dialer_conn.write(msg_string.clone()).await.unwrap();
+        dialer_conn
+            .write(SubstreamMessage::new_with_data(
+                substream_id.clone(),
+                msg_string.clone(),
+            ))
+            .await
+            .unwrap();
         let msg = listener_conn.inbound_rx.recv().await.unwrap();
-        assert_eq!(msg, msg_string);
+        if let SubstreamMessageType::Data(data) = msg.message_type {
+            assert_eq!(data, msg_string);
+        } else {
+            panic!("expected data message");
+        }
 
         // write a message from the dialer to the listener again
         let msg_string = b"hi".to_vec();
-        dialer_conn.write(msg_string.clone()).await.unwrap();
+        dialer_conn
+            .write(SubstreamMessage::new_with_data(
+                substream_id.clone(),
+                msg_string.clone(),
+            ))
+            .await
+            .unwrap();
         let msg = listener_conn.inbound_rx.recv().await.unwrap();
-        assert_eq!(msg, msg_string);
+        if let SubstreamMessageType::Data(data) = msg.message_type {
+            assert_eq!(data, msg_string);
+        } else {
+            panic!("expected data message");
+        }
 
         // write a message from the listener to the dialer
         let msg_string = b"world".to_vec();
-        listener_conn.write(msg_string.clone()).await.unwrap();
+        listener_conn
+            .write(SubstreamMessage::new_with_data(
+                substream_id,
+                msg_string.clone(),
+            ))
+            .await
+            .unwrap();
         let msg = dialer_conn.inbound_rx.recv().await.unwrap();
-        assert_eq!(msg, msg_string);
+        if let SubstreamMessageType::Data(data) = msg.message_type {
+            assert_eq!(data, msg_string);
+        } else {
+            panic!("expected data message");
+        }
     }
 }

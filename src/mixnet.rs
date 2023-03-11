@@ -88,7 +88,7 @@ async fn handle_inbound(
     let res = parse_nym_message(msg)?;
     let msg_bytes = match res {
         ServerResponse::Received(msg_bytes) => {
-            debug!("received request {:?}", msg_bytes);
+            debug!("received message {:?}", msg_bytes);
             msg_bytes
         }
         ServerResponse::Error(e) => return Err(Error::NymMessageError(e.to_string())),
@@ -97,7 +97,9 @@ async fn handle_inbound(
     let data = parse_message_data(&msg_bytes.message)?;
     inbound_tx
         .send(data)
-        .map_err(|e| Error::InboundSendError(e.to_string()))
+        .map_err(|e| Error::InboundSendError(e.to_string()))?;
+    println!("wrote inbound msg to inbound_tx");
+    Ok(())
 }
 
 async fn check_outbound(
@@ -169,7 +171,10 @@ fn parse_nym_message(msg: Message) -> Result<ServerResponse, Error> {
 
 #[cfg(test)]
 mod test {
-    use crate::message::{self, ConnectionId, Message, TransportMessage};
+    use crate::message::{
+        self, ConnectionId, Message, SubstreamId, SubstreamMessage, SubstreamMessageType,
+        TransportMessage,
+    };
     use crate::mixnet::initialize_mixnet;
 
     #[tokio::test]
@@ -177,9 +182,10 @@ mod test {
         let uri = "ws://localhost:1977".to_string();
         let (self_address, mut inbound_rx, outbound_tx) = initialize_mixnet(&uri).await.unwrap();
         let msg_inner = "hello".as_bytes();
+        let substream_id = SubstreamId::generate();
         let msg = Message::TransportMessage(TransportMessage {
             id: ConnectionId::generate(),
-            message: msg_inner.to_vec(),
+            message: SubstreamMessage::new_with_data(substream_id.clone(), msg_inner.to_vec()),
         });
 
         // send a message to ourselves through the mixnet
@@ -193,7 +199,12 @@ mod test {
         // receive the message from ourselves over the mixnet
         let received_msg = inbound_rx.recv().await.unwrap();
         if let Message::TransportMessage(recv_msg) = received_msg.0 {
-            assert_eq!(msg_inner, recv_msg.message);
+            assert_eq!(substream_id, recv_msg.message.substream_id);
+            if let SubstreamMessageType::Data(data) = recv_msg.message.message_type {
+                assert_eq!(msg_inner, data.as_slice());
+            } else {
+                panic!("expected SubstreamMessage::Data")
+            }
         } else {
             panic!("expected Message::TransportMessage")
         }
