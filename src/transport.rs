@@ -379,12 +379,34 @@ mod test {
     use futures::future::poll_fn;
     use libp2p_core::transport::{Transport, TransportEvent};
     use std::pin::Pin;
+    use testcontainers::clients;
+    use testcontainers::core::WaitFor;
+    use testcontainers::images::generic::GenericImage;
 
     #[tokio::test]
     async fn test_connection() {
-        let dialer_uri = "ws://localhost:1977".to_string();
+        // First, use the testcontainers crate to instantiate
+        // docker containers for as many nym instances as required.
+        // NOTE: These take a few seconds to start, since it launches them one after
+        // the other, perhaps optimizing them to be async would be nice.
+        // TODO: abstract this away into a module solely for tests.
+        let docker_client = clients::Cli::default();
+        let nym_ready_message = WaitFor::message_on_stderr("Client startup finished!");
+        let nym_dialer_image = GenericImage::new("nym", "latest")
+            .with_env_var("NYM_ID", "test_connection_dialer")
+            .with_wait_for(nym_ready_message.clone())
+            .with_exposed_port(1977);
+        let dialer_container = docker_client.run(nym_dialer_image);
+        let dialer_port = dialer_container.get_host_port_ipv4(1977);
+        let dialer_uri = format!("ws://0.0.0.0:{dialer_port}");
         let mut dialer_transport = NymTransport::new(&dialer_uri).await.unwrap();
-        let listener_uri = "ws://localhost:1978".to_string();
+        let nym_listener_image = GenericImage::new("nym", "latest")
+            .with_env_var("NYM_ID", "test_connection_listener")
+            .with_wait_for(nym_ready_message.clone())
+            .with_exposed_port(1977);
+        let listener_container = docker_client.run(nym_listener_image);
+        let listener_port = listener_container.get_host_port_ipv4(1977);
+        let listener_uri = format!("ws://0.0.0.0:{listener_port}");
         let mut listener_transport = NymTransport::new(&listener_uri).await.unwrap();
         let listener_multiaddr =
             nym_address_to_multiaddress(listener_transport.self_address).unwrap();
