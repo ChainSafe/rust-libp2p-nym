@@ -176,10 +176,25 @@ mod test {
         TransportMessage,
     };
     use crate::mixnet::initialize_mixnet;
+    use testcontainers::clients;
+    use testcontainers::core::WaitFor;
+    use testcontainers::images::generic::GenericImage;
 
     #[tokio::test]
     async fn test_mixnet_poll_inbound_and_outbound() {
-        let uri = "ws://localhost:1977".to_string();
+        // This section instantiates docker containers of the nym-client
+        // so that tests can be run with all the necessary resources.
+        // This removes the requirement for having to limit test threads
+        // or to build/run nym-client ourselves.
+        let docker_client = clients::Cli::default();
+        let nym_ready_message = WaitFor::message_on_stderr("Client startup finished!");
+        let nym_image = GenericImage::new("nym", "latest")
+            .with_env_var("NYM_ID", "test_connection")
+            .with_wait_for(nym_ready_message)
+            .with_exposed_port(1977);
+        let nym_container = docker_client.run(nym_image);
+        let nym_port = nym_container.get_host_port_ipv4(1977);
+        let uri = format!("ws://0.0.0.0:{nym_port}");
         let (self_address, mut inbound_rx, outbound_tx) = initialize_mixnet(&uri).await.unwrap();
         let msg_inner = "hello".as_bytes();
         let substream_id = SubstreamId::generate();
