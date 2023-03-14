@@ -91,14 +91,19 @@ impl AsyncWrite for Substream {
 #[cfg(test)]
 mod test {
     use futures::{AsyncReadExt, AsyncWriteExt};
+    use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
 
     use super::Substream;
     use crate::message::{ConnectionId, Message, SubstreamId, SubstreamMessage, TransportMessage};
     use crate::mixnet::initialize_mixnet;
+    use crate::new_nym_client;
 
     #[tokio::test]
     async fn test_substream_read_write() {
-        let uri = "ws://localhost:1977".to_string();
+        let nym_id = "test_substream_read_write";
+        #[allow(unused)]
+        let uri: String;
+        new_nym_client!(nym_id, uri);
         let (self_address, mut mixnet_inbound_rx, outbound_tx) =
             initialize_mixnet(&uri).await.unwrap();
 

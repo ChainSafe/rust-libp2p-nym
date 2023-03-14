@@ -384,46 +384,33 @@ fn multiaddress_to_nym_address(multiaddr: Multiaddr) -> Result<Recipient, Error>
 #[cfg(test)]
 mod test {
     use crate::message::{SubstreamId, SubstreamMessage, SubstreamMessageType};
+    use crate::new_nym_client;
 
     use super::{nym_address_to_multiaddress, NymTransport};
     use futures::future::poll_fn;
     use libp2p_core::transport::{Transport, TransportEvent};
     use std::pin::Pin;
-    use testcontainers::clients;
-    use testcontainers::core::WaitFor;
-    use testcontainers::images::generic::GenericImage;
+    use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
     use tracing_subscriber::EnvFilter;
 
     #[tokio::test]
-    async fn test_connection() {
+    async fn test_transport_connection() {
         tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
-        )
-        .init();
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
+            )
+            .init();
 
-        // First, use the testcontainers crate to instantiate
-        // docker containers for as many nym instances as required.
-        // NOTE: These take a few seconds to start, since it launches them one after
-        // the other, perhaps optimizing them to be async would be nice.
-        // TODO: abstract this away into a module solely for tests.
-        let docker_client = clients::Cli::default();
-        let nym_ready_message = WaitFor::message_on_stderr("Client startup finished!");
-        let nym_dialer_image = GenericImage::new("nym", "latest")
-            .with_env_var("NYM_ID", "test_connection_dialer")
-            .with_wait_for(nym_ready_message.clone())
-            .with_exposed_port(1977);
-        let dialer_container = docker_client.run(nym_dialer_image);
-        let dialer_port = dialer_container.get_host_port_ipv4(1977);
-        let dialer_uri = format!("ws://0.0.0.0:{dialer_port}");
+        let nym_id = "test_transport_connection_dialer";
+        #[allow(unused)]
+        let dialer_uri: String;
+        new_nym_client!(nym_id, dialer_uri);
         let mut dialer_transport = NymTransport::new(&dialer_uri).await.unwrap();
-        let nym_listener_image = GenericImage::new("nym", "latest")
-            .with_env_var("NYM_ID", "test_connection_listener")
-            .with_wait_for(nym_ready_message.clone())
-            .with_exposed_port(1977);
-        let listener_container = docker_client.run(nym_listener_image);
-        let listener_port = listener_container.get_host_port_ipv4(1977);
-        let listener_uri = format!("ws://0.0.0.0:{listener_port}");
+
+        let nym_id = "test_transport_connection_listener";
+        #[allow(unused)]
+        let listener_uri: String;
+        new_nym_client!(nym_id, listener_uri);
         let mut listener_transport = NymTransport::new(&listener_uri).await.unwrap();
         let listener_multiaddr =
             nym_address_to_multiaddress(listener_transport.self_address).unwrap();

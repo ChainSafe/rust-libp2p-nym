@@ -324,10 +324,12 @@ impl PendingConnection {
 mod test {
     use futures::future::poll_fn;
     use futures::{AsyncReadExt, AsyncWriteExt, FutureExt};
+    use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
 
     use super::*;
     use crate::message::InboundMessage;
     use crate::mixnet::initialize_mixnet;
+    use crate::new_nym_client;
 
     async fn inbound_receive_and_send(
         connection_id: ConnectionId,
@@ -346,11 +348,17 @@ mod test {
 
     #[tokio::test]
     async fn test_connection_stream_muxer() {
-        let sender_uri = "ws://localhost:1977".to_string();
+        let nym_id = "test_connection_stream_muxer_sender";
+        #[allow(unused)]
+        let sender_uri: String;
+        new_nym_client!(nym_id, sender_uri);
         let (sender_address, mut sender_mixnet_inbound_rx, sender_outbound_tx) =
             initialize_mixnet(&sender_uri).await.unwrap();
 
-        let recipient_uri = "ws://localhost:1978".to_string();
+        let nym_id = "test_connection_stream_muxer_recipient";
+        #[allow(unused)]
+        let recipient_uri: String;
+        new_nym_client!(nym_id, recipient_uri);
         let (recipient_address, mut recipient_mixnet_inbound_rx, recipient_outbound_tx) =
             initialize_mixnet(&recipient_uri).await.unwrap();
 
