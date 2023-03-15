@@ -98,7 +98,6 @@ async fn handle_inbound(
     inbound_tx
         .send(data)
         .map_err(|e| Error::InboundSendError(e.to_string()))?;
-    println!("wrote inbound msg to inbound_tx");
     Ok(())
 }
 

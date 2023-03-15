@@ -385,10 +385,9 @@ fn multiaddress_to_nym_address(multiaddr: Multiaddr) -> Result<Recipient, Error>
 mod test {
     use crate::message::{SubstreamId, SubstreamMessage, SubstreamMessageType};
     use crate::new_nym_client;
-    use crate::transport::Connection;
 
     use super::{nym_address_to_multiaddress, NymTransport};
-    use futures::{future::poll_fn, FutureExt};
+    use futures::{future::poll_fn, AsyncReadExt, AsyncWriteExt, FutureExt};
     use libp2p_core::{
         transport::{Transport, TransportEvent},
         StreamMuxer,
@@ -626,11 +625,10 @@ mod test {
         let dialer_stream_fut = dialer_conn
             .new_stream_with_id(substream_id.clone())
             .unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
 
         // accept the substream on the listener
         poll_fn(|cx| Pin::new(&mut listener_conn).as_mut().poll(cx)).now_or_never();
-        // poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).now_or_never();
 
         // poll recipient's poll_inbound to receive the substream
         let maybe_listener_substream =
@@ -641,11 +639,23 @@ mod test {
 
         // poll sender's poll_outbound to get the substream
         poll_fn(|cx| Pin::new(&mut dialer_conn).as_mut().poll(cx)).now_or_never();
-        let mut sender_substream =
+        let mut dialer_substream =
             poll_fn(|cx| Pin::new(&mut dialer_conn).as_mut().poll_outbound(cx))
                 .await
                 .unwrap();
         dialer_stream_fut.await.unwrap();
-        println!("got sender substream");
+        println!("got dialer substream");
+
+        // finally, write message to the substream
+        let data = b"hello world";
+        dialer_substream.write_all(data).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+
+        // poll listener for message
+        poll_fn(|cx| Pin::new(&mut listener_conn).as_mut().poll(cx)).now_or_never();
+        let mut buf = [0u8; 11];
+        let n = listener_substream.read(&mut buf).await.unwrap();
+        assert_eq!(n, 11);
+        assert_eq!(buf, data[..]);
     }
 }
