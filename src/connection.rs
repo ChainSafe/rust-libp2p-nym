@@ -90,7 +90,7 @@ impl Connection {
 
     /// this is only used in tests right now
     #[allow(dead_code)]
-    pub(crate) async fn write(&self, msg: SubstreamMessage) -> Result<(), Error> {
+    pub(crate) fn write(&self, msg: SubstreamMessage) -> Result<(), Error> {
         self.mixnet_outbound_tx
             .send(OutboundMessage {
                 recipient: self.remote_recipient,

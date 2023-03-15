@@ -383,8 +383,10 @@ fn multiaddress_to_nym_address(multiaddr: Multiaddr) -> Result<Recipient, Error>
 
 #[cfg(test)]
 mod test {
+    use crate::connection::Connection;
     use crate::message::{SubstreamId, SubstreamMessage, SubstreamMessageType};
     use crate::new_nym_client;
+    use crate::substream::Substream;
 
     use super::{nym_address_to_multiaddress, NymTransport};
     use futures::{future::poll_fn, AsyncReadExt, AsyncWriteExt, FutureExt};
@@ -393,7 +395,9 @@ mod test {
         StreamMuxer,
     };
     use std::pin::Pin;
+    use std::time::Duration;
     use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
+    use tracing::info;
     use tracing_subscriber::EnvFilter;
 
     #[tokio::test]
@@ -403,6 +407,8 @@ mod test {
                 EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
             )
             .init();
+
+        let sleep_duration = std::time::Duration::from_millis(1200);
 
         let nym_id = "test_transport_connection_dialer";
         #[allow(unused)]
@@ -417,116 +423,115 @@ mod test {
         let mut listener_transport = NymTransport::new(&listener_uri).await.unwrap();
         let listener_multiaddr =
             nym_address_to_multiaddress(listener_transport.self_address).unwrap();
+        assert_new_address_event(Pin::new(&mut dialer_transport)).await;
+        assert_new_address_event(Pin::new(&mut listener_transport)).await;
 
-        let res = poll_fn(|cx| Pin::new(&mut dialer_transport).as_mut().poll(cx)).await;
-        match res {
-            TransportEvent::NewAddress {
-                listener_id,
-                listen_addr,
-            } => {
-                assert_eq!(listener_id, dialer_transport.listener_id);
-                assert_eq!(listen_addr, dialer_transport.listen_addr);
-            }
-            _ => panic!("expected TransportEvent::NewAddress"),
-        }
+        // dial the remote peer
+        let mut dial = dialer_transport.dial(listener_multiaddr).unwrap();
 
+        // poll the dial to send the connection request message
+        assert!(poll_fn(|cx| Pin::new(&mut dial).as_mut().poll_unpin(cx))
+            .now_or_never()
+            .is_none());
+        tokio::time::sleep(sleep_duration).await;
+
+        // should receive the connection request from the mixnet and send the connection response
         let res = poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).await;
-        match res {
-            TransportEvent::NewAddress {
+        let mut upgrade = match res {
+            TransportEvent::Incoming {
                 listener_id,
-                listen_addr,
+                upgrade,
+                local_addr,
+                send_back_addr,
             } => {
                 assert_eq!(listener_id, listener_transport.listener_id);
-                assert_eq!(listen_addr, listener_transport.listen_addr);
+                assert_eq!(local_addr, listener_transport.listen_addr);
+                assert_eq!(send_back_addr, listener_transport.listen_addr);
+                upgrade
+            }
+            _ => panic!("expected TransportEvent::Incoming, got {:?}", res),
+        };
+        tokio::time::sleep(sleep_duration).await;
+
+        // should receive the connection response from the mixnet
+        assert!(
+            poll_fn(|cx| Pin::new(&mut dialer_transport).as_mut().poll(cx))
+                .now_or_never()
+                .is_none()
+        );
+        info!("waiting for connections...");
+
+        // should be able to resolve the connections now
+        let mut listener_conn = poll_fn(|cx| Pin::new(&mut upgrade).as_mut().poll_unpin(cx))
+            .now_or_never()
+            .unwrap()
+            .unwrap();
+        let mut dialer_conn = poll_fn(|cx| Pin::new(&mut dial).as_mut().poll_unpin(cx))
+            .now_or_never()
+            .unwrap()
+            .unwrap();
+        info!("connections established");
+
+        // write messages from the dialer to the listener and vice versa
+        send_and_receive_over_conns(
+            b"hello".to_vec(),
+            &mut dialer_conn,
+            &mut listener_conn,
+            Pin::new(&mut listener_transport),
+        )
+        .await;
+        send_and_receive_over_conns(
+            b"hi".to_vec(),
+            &mut dialer_conn,
+            &mut listener_conn,
+            Pin::new(&mut listener_transport),
+        )
+        .await;
+        send_and_receive_over_conns(
+            b"world".to_vec(),
+            &mut listener_conn,
+            &mut dialer_conn,
+            Pin::new(&mut dialer_transport),
+        )
+        .await;
+    }
+
+    async fn assert_new_address_event(mut transport: Pin<&mut NymTransport>) {
+        match poll_fn(|cx| transport.as_mut().poll(cx)).await {
+            TransportEvent::NewAddress {
+                listener_id,
+                listen_addr,
+            } => {
+                assert_eq!(listener_id, transport.listener_id);
+                assert_eq!(listen_addr, transport.listen_addr);
             }
             _ => panic!("expected TransportEvent::NewAddress"),
         }
+    }
 
-        // dial the remote peer; put awaiting the dial into a thread
-        let dial = dialer_transport.dial(listener_multiaddr).unwrap();
-        let maybe_dialer_conn = tokio::task::spawn(async move { dial.await.unwrap() });
-
-        tokio::task::spawn(async move {
-            // should send the connection request message and receive the response from the mixnet
-            poll_fn(|cx| Pin::new(&mut dialer_transport).as_mut().poll(cx)).await;
-        });
-
-        let maybe_listener_conn = tokio::task::spawn(async move {
-            // should receive the connection request from the mixnet
-            let res = poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).await;
-            let upgrade = match res {
-                TransportEvent::Incoming {
-                    listener_id,
-                    upgrade,
-                    local_addr,
-                    send_back_addr,
-                } => {
-                    assert_eq!(listener_id, listener_transport.listener_id);
-                    assert_eq!(local_addr, listener_transport.listen_addr);
-                    assert_eq!(send_back_addr, listener_transport.listen_addr);
-                    upgrade
-                }
-                _ => panic!("expected TransportEvent::Incoming, got {:?}", res),
-            };
-
-            tokio::task::spawn(async move {
-                // should send the connection response into the mixnet
-                poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).await;
-            });
-            //poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).now_or_never();
-            let listener_conn = upgrade.await.unwrap();
-            listener_conn
-        });
-
-        println!("waiting for connections...");
-        let mut dialer_conn = maybe_dialer_conn.await.unwrap();
-        let mut listener_conn = maybe_listener_conn.await.unwrap();
-
-        // write a message from the dialer to the listener
+    async fn send_and_receive_over_conns(
+        msg: Vec<u8>,
+        conn1: &mut Connection,
+        conn2: &mut Connection,
+        mut transport2: Pin<&mut NymTransport>,
+    ) {
+        // send message over conn1 to conn2
         let substream_id = SubstreamId::generate();
-        let msg_string = b"hello".to_vec();
-        dialer_conn
+        conn1
             .write(SubstreamMessage::new_with_data(
                 substream_id.clone(),
-                msg_string.clone(),
+                msg.clone(),
             ))
-            .await
             .unwrap();
-        let msg = listener_conn.inbound_rx.recv().await.unwrap();
-        if let SubstreamMessageType::Data(data) = msg.message_type {
-            assert_eq!(data, msg_string);
-        } else {
-            panic!("expected data message");
-        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(1200)).await;
 
-        // write a message from the dialer to the listener again
-        let msg_string = b"hi".to_vec();
-        dialer_conn
-            .write(SubstreamMessage::new_with_data(
-                substream_id.clone(),
-                msg_string.clone(),
-            ))
-            .await
-            .unwrap();
-        let msg = listener_conn.inbound_rx.recv().await.unwrap();
-        if let SubstreamMessageType::Data(data) = msg.message_type {
-            assert_eq!(data, msg_string);
-        } else {
-            panic!("expected data message");
-        }
-
-        // write a message from the listener to the dialer
-        let msg_string = b"world".to_vec();
-        listener_conn
-            .write(SubstreamMessage::new_with_data(
-                substream_id,
-                msg_string.clone(),
-            ))
-            .await
-            .unwrap();
-        let msg = dialer_conn.inbound_rx.recv().await.unwrap();
-        if let SubstreamMessageType::Data(data) = msg.message_type {
-            assert_eq!(data, msg_string);
+        // poll transport2 to push message from transport to connection
+        assert!(poll_fn(|cx| transport2.as_mut().poll(cx))
+            .now_or_never()
+            .is_none());
+        let substream_msg = conn2.inbound_rx.recv().await.unwrap();
+        if let SubstreamMessageType::Data(data) = substream_msg.message_type {
+            assert_eq!(data, msg);
         } else {
             panic!("expected data message");
         }
@@ -539,6 +544,8 @@ mod test {
                 EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
             )
             .init();
+
+        let sleep_duration = std::time::Duration::from_millis(1200);
 
         let nym_id = "test_transport_substream_dialer";
         #[allow(unused)]
@@ -553,121 +560,135 @@ mod test {
         let mut listener_transport = NymTransport::new(&listener_uri).await.unwrap();
         let listener_multiaddr =
             nym_address_to_multiaddress(listener_transport.self_address).unwrap();
+        assert_new_address_event(Pin::new(&mut dialer_transport)).await;
+        assert_new_address_event(Pin::new(&mut listener_transport)).await;
 
-        let res = poll_fn(|cx| Pin::new(&mut dialer_transport).as_mut().poll(cx)).await;
-        match res {
-            TransportEvent::NewAddress {
-                listener_id,
-                listen_addr,
-            } => {
-                assert_eq!(listener_id, dialer_transport.listener_id);
-                assert_eq!(listen_addr, dialer_transport.listen_addr);
-            }
-            _ => panic!("expected TransportEvent::NewAddress"),
-        }
+        // dial the remote peer
+        let mut dial = dialer_transport.dial(listener_multiaddr).unwrap();
 
+        // poll the dial to send the connection request message
+        assert!(poll_fn(|cx| Pin::new(&mut dial).as_mut().poll_unpin(cx))
+            .now_or_never()
+            .is_none());
+        tokio::time::sleep(sleep_duration).await;
+
+        // should receive the connection request from the mixnet and send the connection response
         let res = poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).await;
-        match res {
-            TransportEvent::NewAddress {
+        let mut upgrade = match res {
+            TransportEvent::Incoming {
                 listener_id,
-                listen_addr,
+                upgrade,
+                local_addr,
+                send_back_addr,
             } => {
                 assert_eq!(listener_id, listener_transport.listener_id);
-                assert_eq!(listen_addr, listener_transport.listen_addr);
+                assert_eq!(local_addr, listener_transport.listen_addr);
+                assert_eq!(send_back_addr, listener_transport.listen_addr);
+                upgrade
             }
-            _ => panic!("expected TransportEvent::NewAddress"),
-        }
+            _ => panic!("expected TransportEvent::Incoming, got {:?}", res),
+        };
+        tokio::time::sleep(sleep_duration * 2).await;
 
-        // dial the remote peer; put awaiting the dial into a thread
-        let dial = dialer_transport.dial(listener_multiaddr).unwrap();
-        let maybe_dialer_conn = tokio::task::spawn(async move { dial.await.unwrap() });
+        // should receive the connection response from the mixnet
+        assert!(
+            poll_fn(|cx| Pin::new(&mut dialer_transport).as_mut().poll(cx))
+                .now_or_never()
+                .is_none()
+        );
+        info!("waiting for connections...");
 
-        tokio::task::spawn(async move {
-            // should send the connection request message and receive the response from the mixnet
-            poll_fn(|cx| Pin::new(&mut dialer_transport).as_mut().poll(cx)).await;
-        });
-
-        let maybe_listener_conn = tokio::task::spawn(async move {
-            // should receive the connection request from the mixnet
-            let res = poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).await;
-            let upgrade = match res {
-                TransportEvent::Incoming {
-                    listener_id,
-                    upgrade,
-                    local_addr,
-                    send_back_addr,
-                } => {
-                    assert_eq!(listener_id, listener_transport.listener_id);
-                    assert_eq!(local_addr, listener_transport.listen_addr);
-                    assert_eq!(send_back_addr, listener_transport.listen_addr);
-                    upgrade
-                }
-                _ => panic!("expected TransportEvent::Incoming, got {:?}", res),
-            };
-
-            tokio::task::spawn(async move {
-                // should send the connection response into the mixnet
-                poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).await;
-                println!("listener transport poll done");
-            });
-
-            let listener_conn = upgrade.await.unwrap();
-            listener_conn
-        });
-
-        println!("waiting for connections...");
-        let mut dialer_conn = maybe_dialer_conn.await.unwrap();
-        let mut listener_conn = maybe_listener_conn.await.unwrap();
-        println!("got connections");
+        // should be able to resolve the connections now
+        let mut listener_conn = poll_fn(|cx| Pin::new(&mut upgrade).as_mut().poll_unpin(cx))
+            .now_or_never()
+            .unwrap()
+            .unwrap();
+        let mut dialer_conn = poll_fn(|cx| Pin::new(&mut dial).as_mut().poll_unpin(cx))
+            .now_or_never()
+            .unwrap()
+            .unwrap();
+        info!("connections established");
 
         // initiate a new substream from the dialer
         let substream_id = SubstreamId::generate();
         let dialer_stream_fut = dialer_conn
             .new_stream_with_id(substream_id.clone())
             .unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        tokio::time::sleep(sleep_duration).await;
 
         // accept the substream on the listener
+        assert!(
+            poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx))
+                .now_or_never()
+                .is_none()
+        );
         poll_fn(|cx| Pin::new(&mut listener_conn).as_mut().poll(cx)).now_or_never();
 
         // poll recipient's poll_inbound to receive the substream
-        let maybe_listener_substream =
-            poll_fn(|cx| Pin::new(&mut listener_conn).as_mut().poll_inbound(cx)).now_or_never();
-        let mut listener_substream = maybe_listener_substream.unwrap().unwrap();
-        println!("got listener substream");
-        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+        let mut listener_substream =
+            poll_fn(|cx| Pin::new(&mut listener_conn).as_mut().poll_inbound(cx))
+                .now_or_never()
+                .unwrap()
+                .unwrap();
+        info!("got listener substream");
+        tokio::time::sleep(sleep_duration).await;
 
         // poll sender's poll_outbound to get the substream
+        assert!(
+            poll_fn(|cx| Pin::new(&mut dialer_transport).as_mut().poll(cx))
+                .now_or_never()
+                .is_none()
+        );
         poll_fn(|cx| Pin::new(&mut dialer_conn).as_mut().poll(cx)).now_or_never();
         let mut dialer_substream =
             poll_fn(|cx| Pin::new(&mut dialer_conn).as_mut().poll_outbound(cx))
                 .await
                 .unwrap();
         dialer_stream_fut.await.unwrap();
-        println!("got dialer substream");
+        info!("got dialer substream");
 
         // write message from dialer to listener
-        let data = b"hello world";
-        dialer_substream.write_all(data).await.unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
-
-        // poll listener for message
-        poll_fn(|cx| Pin::new(&mut listener_conn).as_mut().poll(cx)).now_or_never();
-        let mut buf = [0u8; 11];
-        let n = listener_substream.read(&mut buf).await.unwrap();
-        assert_eq!(n, 11);
-        assert_eq!(buf, data[..]);
+        send_and_receive_substream_message(
+            b"hello world".to_vec(),
+            Pin::new(&mut dialer_substream),
+            Pin::new(&mut listener_substream),
+            listener_transport,
+            listener_conn,
+        )
+        .await;
 
         // write message from listener to dialer
-        let data = b"hello back";
-        listener_substream.write_all(data).await.unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+        send_and_receive_substream_message(
+            b"hello back".to_vec(),
+            Pin::new(&mut listener_substream),
+            Pin::new(&mut dialer_substream),
+            dialer_transport,
+            dialer_conn,
+        )
+        .await;
+    }
 
-        // poll dialer for message
-        poll_fn(|cx| Pin::new(&mut dialer_conn).as_mut().poll(cx)).now_or_never();
-        let mut buf = [0u8; 10];
-        let n = dialer_substream.read(&mut buf).await.unwrap();
-        assert_eq!(n, 10);
+    async fn send_and_receive_substream_message(
+        data: Vec<u8>,
+        mut sender_substream: Pin<&mut Substream>,
+        mut recipient_substream: Pin<&mut Substream>,
+        mut recipient_transport: NymTransport,
+        mut recipient_conn: Connection,
+    ) {
+        // write message
+        sender_substream.write_all(&data).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+
+        // poll recipient for message
+        assert!(
+            poll_fn(|cx| Pin::new(&mut recipient_transport).as_mut().poll(cx))
+                .now_or_never()
+                .is_none()
+        );
+        poll_fn(|cx| Pin::new(&mut recipient_conn).as_mut().poll(cx)).now_or_never();
+        let mut buf = vec![0u8; data.len()];
+        let n = recipient_substream.read(&mut buf).await.unwrap();
+        assert_eq!(n, data.len());
         assert_eq!(buf, data[..]);
     }
 }

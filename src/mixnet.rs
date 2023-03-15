@@ -71,7 +71,7 @@ async fn check_inbound(
     inbound_tx: &UnboundedSender<InboundMessage>,
 ) -> Result<(), Error> {
     if let Some(res) = ws_stream.next().await {
-        debug!("got inbound message from mixnet: {:?}", res);
+        debug!("got inbound message from mixnet");
         match res {
             Ok(msg) => return handle_inbound(msg, inbound_tx).await,
             Err(e) => return Err(Error::WebsocketStreamError(e)),
@@ -87,10 +87,7 @@ async fn handle_inbound(
 ) -> Result<(), Error> {
     let res = parse_nym_message(msg)?;
     let msg_bytes = match res {
-        ServerResponse::Received(msg_bytes) => {
-            debug!("received message {:?}", msg_bytes);
-            msg_bytes
-        }
+        ServerResponse::Received(msg_bytes) => msg_bytes,
         ServerResponse::Error(e) => return Err(Error::NymMessageError(e.to_string())),
         _ => return Err(Error::UnexpectedNymMessage),
     };
