@@ -646,7 +646,7 @@ mod test {
         dialer_stream_fut.await.unwrap();
         println!("got dialer substream");
 
-        // finally, write message to the substream
+        // write message from dialer to listener
         let data = b"hello world";
         dialer_substream.write_all(data).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
@@ -656,6 +656,18 @@ mod test {
         let mut buf = [0u8; 11];
         let n = listener_substream.read(&mut buf).await.unwrap();
         assert_eq!(n, 11);
+        assert_eq!(buf, data[..]);
+
+        // write message from listener to dialer
+        let data = b"hello back";
+        listener_substream.write_all(data).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+
+        // poll dialer for message
+        poll_fn(|cx| Pin::new(&mut dialer_conn).as_mut().poll(cx)).now_or_never();
+        let mut buf = [0u8; 10];
+        let n = dialer_substream.read(&mut buf).await.unwrap();
+        assert_eq!(n, 10);
         assert_eq!(buf, data[..]);
     }
 }
