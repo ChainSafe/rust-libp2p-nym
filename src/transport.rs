@@ -697,10 +697,10 @@ mod test {
         .await;
 
         // close the substream from the dialer side
-        println!("closing dialer substream");
+        info!("closing dialer substream");
         dialer_substream.close().await.unwrap();
         listener_notify_inbound_rx.recv().await.unwrap();
-        println!("dialer substream closed");
+        info!("dialer substream closed");
 
         // assert we can't read or write to either substream
         dialer_substream.write_all(b"hello").await.unwrap_err();

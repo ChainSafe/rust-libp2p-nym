@@ -277,7 +277,6 @@ impl StreamMuxer for Connection {
                     self.handle_close(msg.substream_id)?;
                 }
                 SubstreamMessageType::Data(data) => {
-                    println!("got SubstreamMessageType::Data");
                     if let Some(inbound_tx) = self.substream_inbound_txs.get_mut(&msg.substream_id)
                     {
                         inbound_tx
