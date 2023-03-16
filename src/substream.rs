@@ -169,7 +169,7 @@ mod test {
         let uri: String;
         new_nym_client!(nym_id, uri);
         let (self_address, mut mixnet_inbound_rx, outbound_tx) =
-            initialize_mixnet(&uri).await.unwrap();
+            initialize_mixnet(&uri, None).await.unwrap();
 
         const MSG_INNER: &[u8] = "hello".as_bytes();
         let connection_id = ConnectionId::generate();
@@ -249,7 +249,7 @@ mod test {
         #[allow(unused)]
         let uri: String;
         new_nym_client!(nym_id, uri);
-        let (self_address, _, outbound_tx) = initialize_mixnet(&uri).await.unwrap();
+        let (self_address, _, outbound_tx) = initialize_mixnet(&uri, None).await.unwrap();
 
         const MSG_INNER: &[u8] = "hello".as_bytes();
         let connection_id = ConnectionId::generate();

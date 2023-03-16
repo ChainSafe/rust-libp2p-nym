@@ -63,7 +63,24 @@ pub struct NymTransport {
 
 impl NymTransport {
     pub async fn new(uri: &String) -> Result<Self, Error> {
-        let (self_address, inbound_rx, outbound_tx) = initialize_mixnet(uri).await?;
+        Self::new_maybe_with_notify_inbound(uri, None).await
+    }
+
+    // this is only used in tests
+    #[allow(dead_code)]
+    pub(crate) async fn new_with_notify_inbound(
+        uri: &String,
+        notify_inbound_tx: UnboundedSender<()>,
+    ) -> Result<Self, Error> {
+        Self::new_maybe_with_notify_inbound(uri, Some(notify_inbound_tx)).await
+    }
+
+    async fn new_maybe_with_notify_inbound(
+        uri: &String,
+        notify_inbound_tx: Option<UnboundedSender<()>>,
+    ) -> Result<Self, Error> {
+        let (self_address, inbound_rx, outbound_tx) =
+            initialize_mixnet(uri, notify_inbound_tx).await?;
         let listen_addr = nym_address_to_multiaddress(self_address)?;
         let listener_id = ListenerId::new();
 
@@ -395,8 +412,8 @@ mod test {
         StreamMuxer,
     };
     use std::pin::Pin;
-    use std::time::Duration;
     use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
+    use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
     use tracing::info;
     use tracing_subscriber::EnvFilter;
 
@@ -408,19 +425,25 @@ mod test {
             )
             .init();
 
-        let sleep_duration = std::time::Duration::from_millis(1200);
-
         let nym_id = "test_transport_connection_dialer";
         #[allow(unused)]
         let dialer_uri: String;
         new_nym_client!(nym_id, dialer_uri);
-        let mut dialer_transport = NymTransport::new(&dialer_uri).await.unwrap();
+        let (dialer_notify_inbound_tx, mut dialer_notify_inbound_rx) = unbounded_channel();
+        let mut dialer_transport =
+            NymTransport::new_with_notify_inbound(&dialer_uri, dialer_notify_inbound_tx)
+                .await
+                .unwrap();
 
         let nym_id = "test_transport_connection_listener";
         #[allow(unused)]
         let listener_uri: String;
         new_nym_client!(nym_id, listener_uri);
-        let mut listener_transport = NymTransport::new(&listener_uri).await.unwrap();
+        let (listener_notify_inbound_tx, mut listener_notify_inbound_rx) = unbounded_channel();
+        let mut listener_transport =
+            NymTransport::new_with_notify_inbound(&listener_uri, listener_notify_inbound_tx)
+                .await
+                .unwrap();
         let listener_multiaddr =
             nym_address_to_multiaddress(listener_transport.self_address).unwrap();
         assert_new_address_event(Pin::new(&mut dialer_transport)).await;
@@ -433,7 +456,7 @@ mod test {
         assert!(poll_fn(|cx| Pin::new(&mut dial).as_mut().poll_unpin(cx))
             .now_or_never()
             .is_none());
-        tokio::time::sleep(sleep_duration).await;
+        listener_notify_inbound_rx.recv().await.unwrap();
 
         // should receive the connection request from the mixnet and send the connection response
         let res = poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).await;
@@ -451,7 +474,7 @@ mod test {
             }
             _ => panic!("expected TransportEvent::Incoming, got {:?}", res),
         };
-        tokio::time::sleep(sleep_duration).await;
+        dialer_notify_inbound_rx.recv().await.unwrap();
 
         // should receive the connection response from the mixnet
         assert!(
@@ -478,6 +501,7 @@ mod test {
             &mut dialer_conn,
             &mut listener_conn,
             Pin::new(&mut listener_transport),
+            &mut listener_notify_inbound_rx,
         )
         .await;
         send_and_receive_over_conns(
@@ -485,6 +509,7 @@ mod test {
             &mut dialer_conn,
             &mut listener_conn,
             Pin::new(&mut listener_transport),
+            &mut listener_notify_inbound_rx,
         )
         .await;
         send_and_receive_over_conns(
@@ -492,6 +517,7 @@ mod test {
             &mut listener_conn,
             &mut dialer_conn,
             Pin::new(&mut dialer_transport),
+            &mut dialer_notify_inbound_rx,
         )
         .await;
     }
@@ -514,6 +540,7 @@ mod test {
         conn1: &mut Connection,
         conn2: &mut Connection,
         mut transport2: Pin<&mut NymTransport>,
+        notify_inbound_rx: &mut UnboundedReceiver<()>,
     ) {
         // send message over conn1 to conn2
         let substream_id = SubstreamId::generate();
@@ -523,7 +550,7 @@ mod test {
                 msg.clone(),
             ))
             .unwrap();
-        tokio::time::sleep(tokio::time::Duration::from_millis(1200)).await;
+        notify_inbound_rx.recv().await.unwrap();
 
         // poll transport2 to push message from transport to connection
         assert!(poll_fn(|cx| transport2.as_mut().poll(cx))
@@ -539,19 +566,25 @@ mod test {
 
     #[tokio::test]
     async fn test_transport_substream() {
-        let sleep_duration = std::time::Duration::from_millis(1200);
-
         let nym_id = "test_transport_substream_dialer";
         #[allow(unused)]
         let dialer_uri: String;
         new_nym_client!(nym_id, dialer_uri);
-        let mut dialer_transport = NymTransport::new(&dialer_uri).await.unwrap();
+        let (dialer_notify_inbound_tx, mut dialer_notify_inbound_rx) = unbounded_channel();
+        let mut dialer_transport =
+            NymTransport::new_with_notify_inbound(&dialer_uri, dialer_notify_inbound_tx)
+                .await
+                .unwrap();
 
         let nym_id = "test_transport_substream_listener";
         #[allow(unused)]
         let listener_uri: String;
         new_nym_client!(nym_id, listener_uri);
-        let mut listener_transport = NymTransport::new(&listener_uri).await.unwrap();
+        let (listener_notify_inbound_tx, mut listener_notify_inbound_rx) = unbounded_channel();
+        let mut listener_transport =
+            NymTransport::new_with_notify_inbound(&listener_uri, listener_notify_inbound_tx)
+                .await
+                .unwrap();
         let listener_multiaddr =
             nym_address_to_multiaddress(listener_transport.self_address).unwrap();
         assert_new_address_event(Pin::new(&mut dialer_transport)).await;
@@ -564,7 +597,7 @@ mod test {
         assert!(poll_fn(|cx| Pin::new(&mut dial).as_mut().poll_unpin(cx))
             .now_or_never()
             .is_none());
-        tokio::time::sleep(sleep_duration).await;
+        listener_notify_inbound_rx.recv().await.unwrap();
 
         // should receive the connection request from the mixnet and send the connection response
         let res = poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).await;
@@ -582,7 +615,7 @@ mod test {
             }
             _ => panic!("expected TransportEvent::Incoming, got {:?}", res),
         };
-        tokio::time::sleep(sleep_duration * 2).await;
+        dialer_notify_inbound_rx.recv().await.unwrap();
 
         // should receive the connection response from the mixnet
         assert!(
@@ -608,7 +641,7 @@ mod test {
         let dialer_stream_fut = dialer_conn
             .new_stream_with_id(substream_id.clone())
             .unwrap();
-        tokio::time::sleep(sleep_duration).await;
+        listener_notify_inbound_rx.recv().await.unwrap();
 
         // accept the substream on the listener
         assert!(
@@ -625,7 +658,7 @@ mod test {
                 .unwrap()
                 .unwrap();
         info!("got listener substream");
-        tokio::time::sleep(sleep_duration).await;
+        dialer_notify_inbound_rx.recv().await.unwrap();
 
         // poll sender's poll_outbound to get the substream
         assert!(
@@ -648,6 +681,7 @@ mod test {
             Pin::new(&mut listener_substream),
             Pin::new(&mut listener_transport),
             Pin::new(&mut listener_conn),
+            &mut listener_notify_inbound_rx,
         )
         .await;
 
@@ -658,13 +692,14 @@ mod test {
             Pin::new(&mut dialer_substream),
             Pin::new(&mut dialer_transport),
             Pin::new(&mut dialer_conn),
+            &mut dialer_notify_inbound_rx,
         )
         .await;
 
         // close the substream from the dialer side
         println!("closing dialer substream");
         dialer_substream.close().await.unwrap();
-        tokio::time::sleep(sleep_duration).await;
+        listener_notify_inbound_rx.recv().await.unwrap();
         println!("dialer substream closed");
 
         // assert we can't read or write to either substream
@@ -685,10 +720,11 @@ mod test {
         mut recipient_substream: Pin<&mut Substream>,
         mut recipient_transport: Pin<&mut NymTransport>,
         mut recipient_conn: Pin<&mut Connection>,
+        recipient_notify_inbound_rx: &mut UnboundedReceiver<()>,
     ) {
         // write message
         sender_substream.write_all(&data).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+        recipient_notify_inbound_rx.recv().await.unwrap();
 
         // poll recipient for message
         poll_fn(|cx| recipient_transport.as_mut().poll(cx)).now_or_never();

@@ -37,7 +37,7 @@ pub struct Connection {
     /// substream ID -> substream's inbound_tx channel
     substream_inbound_txs: HashMap<SubstreamId, UnboundedSender<Vec<u8>>>,
 
-    /// substream ID -> substrean's close_tx channel
+    /// substream ID -> substream's close_tx channel
     substream_close_txs: HashMap<SubstreamId, oneshot::Sender<()>>,
 
     /// send messages to the mixnet
@@ -290,7 +290,6 @@ impl StreamMuxer for Connection {
             }
         }
 
-        // TODO: where to wake?
         self.waker = Some(cx.waker().clone());
         Poll::Pending
     }
@@ -369,14 +368,14 @@ mod test {
         let sender_uri: String;
         new_nym_client!(nym_id, sender_uri);
         let (sender_address, mut sender_mixnet_inbound_rx, sender_outbound_tx) =
-            initialize_mixnet(&sender_uri).await.unwrap();
+            initialize_mixnet(&sender_uri, None).await.unwrap();
 
         let nym_id = "test_connection_stream_muxer_recipient";
         #[allow(unused)]
         let recipient_uri: String;
         new_nym_client!(nym_id, recipient_uri);
         let (recipient_address, mut recipient_mixnet_inbound_rx, recipient_outbound_tx) =
-            initialize_mixnet(&recipient_uri).await.unwrap();
+            initialize_mixnet(&recipient_uri, None).await.unwrap();
 
         let connection_id = ConnectionId::generate();
 

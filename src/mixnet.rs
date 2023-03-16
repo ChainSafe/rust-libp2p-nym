@@ -21,6 +21,7 @@ use crate::message::*;
 /// It starts a task that listens for inbound messages from the endpoint and writes outbound messages to the endpoint.
 pub(crate) async fn initialize_mixnet(
     uri: &String,
+    notify_inbound_tx: Option<UnboundedSender<()>>,
 ) -> Result<
     (
         Recipient,
@@ -47,7 +48,7 @@ pub(crate) async fn initialize_mixnet(
 
     tokio::task::spawn(async move {
         loop {
-            let t1 = check_inbound(&mut stream, &inbound_tx).fuse();
+            let t1 = check_inbound(&mut stream, &inbound_tx, &notify_inbound_tx).fuse();
             let t2 = check_outbound(&mut sink, &mut outbound_rx).fuse();
 
             pin_mut!(t1, t2);
@@ -69,9 +70,16 @@ pub(crate) async fn initialize_mixnet(
 async fn check_inbound(
     ws_stream: &mut SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
     inbound_tx: &UnboundedSender<InboundMessage>,
+    notify_inbound_tx: &Option<UnboundedSender<()>>,
 ) -> Result<(), Error> {
     if let Some(res) = ws_stream.next().await {
         debug!("got inbound message from mixnet");
+        if let Some(notify_tx) = notify_inbound_tx {
+            notify_tx
+                .send(())
+                .map_err(|e| Error::InboundSendError(e.to_string()))?;
+        }
+
         match res {
             Ok(msg) => return handle_inbound(msg, inbound_tx).await,
             Err(e) => return Err(Error::WebsocketStreamError(e)),
@@ -182,7 +190,8 @@ mod test {
         #[allow(unused)]
         let uri: String;
         new_nym_client!(nym_id, uri);
-        let (self_address, mut inbound_rx, outbound_tx) = initialize_mixnet(&uri).await.unwrap();
+        let (self_address, mut inbound_rx, outbound_tx) =
+            initialize_mixnet(&uri, None).await.unwrap();
         let msg_inner = "hello".as_bytes();
         let substream_id = SubstreamId::generate();
         let msg = Message::TransportMessage(TransportMessage {
