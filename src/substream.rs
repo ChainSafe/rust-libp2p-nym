@@ -156,7 +156,6 @@ impl AsyncWrite for Substream {
 mod test {
     use futures::{AsyncReadExt, AsyncWriteExt};
     use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
-    use tracing_subscriber::EnvFilter;
 
     use super::Substream;
     use crate::message::{ConnectionId, Message, SubstreamId, SubstreamMessage, TransportMessage};
@@ -165,12 +164,6 @@ mod test {
 
     #[tokio::test]
     async fn test_substream_read_write() {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
-            )
-            .init();
-
         let nym_id = "test_substream_read_write";
         #[allow(unused)]
         let uri: String;

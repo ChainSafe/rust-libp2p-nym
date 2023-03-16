@@ -539,12 +539,6 @@ mod test {
 
     #[tokio::test]
     async fn test_transport_substream() {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
-            )
-            .init();
-
         let sleep_duration = std::time::Duration::from_millis(1200);
 
         let nym_id = "test_transport_substream_dialer";
