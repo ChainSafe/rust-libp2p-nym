@@ -37,6 +37,9 @@ pub struct Connection {
     /// substream ID -> substream's inbound_tx channel
     substream_inbound_txs: HashMap<SubstreamId, UnboundedSender<Vec<u8>>>,
 
+    /// substream ID -> substrean's close_tx channel
+    substream_close_txs: HashMap<SubstreamId, oneshot::Sender<()>>,
+
     /// send messages to the mixnet
     /// used for sending `SubstreamMessageType::OpenRequest` messages
     /// also passed to each substream so they can write to the mixnet
@@ -76,6 +79,7 @@ impl Connection {
             inbound_rx,
             pending_substreams_tx: HashMap::new(),
             substream_inbound_txs: HashMap::new(),
+            substream_close_txs: HashMap::new(),
             mixnet_outbound_tx,
             inbound_open_tx,
             inbound_open_rx,
@@ -148,18 +152,30 @@ impl Connection {
         }
 
         let (inbound_tx, inbound_rx) = unbounded_channel::<Vec<u8>>();
+        let (close_tx, close_rx) = oneshot::channel::<()>();
         self.substream_inbound_txs.insert(id.clone(), inbound_tx);
+        self.substream_close_txs.insert(id.clone(), close_tx);
+
         Ok(Substream::new(
             self.remote_recipient,
             self.id.clone(),
             id,
             inbound_rx,
             self.mixnet_outbound_tx.clone(),
+            close_rx,
         ))
     }
 
     fn handle_close(&mut self, substream_id: SubstreamId) -> Result<(), Error> {
-        self.substream_inbound_txs.remove(&substream_id);
+        if self.substream_inbound_txs.remove(&substream_id).is_none() {
+            return Err(Error::SubstreamIdDoesNotExist(substream_id));
+        }
+
+        // notify substream that it's closed
+        let close_tx = self.substream_close_txs.remove(&substream_id);
+        close_tx.unwrap().send(()).unwrap();
+
+        // notify poll_close that the substream is closed
         self.close_tx
             .send(substream_id)
             .map_err(|e| Error::InboundSendError(e.to_string()))
@@ -446,5 +462,14 @@ mod test {
         let n = recipient_substream.read(&mut buf).await.unwrap();
         assert_eq!(n, 11);
         assert_eq!(buf, data[..]);
+
+        // test closing the stream; assert the stream is closed on both sides
+        sender_substream.close().await.unwrap();
+        inbound_receive_and_send(
+            connection_id.clone(),
+            &mut recipient_mixnet_inbound_rx,
+            &recipient_inbound_tx,
+        )
+        .await;
     }
 }

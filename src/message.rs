@@ -179,6 +179,13 @@ impl SubstreamMessage {
         }
     }
 
+    pub(crate) fn new_close(substream_id: SubstreamId) -> Self {
+        SubstreamMessage {
+            substream_id,
+            message_type: SubstreamMessageType::Close,
+        }
+    }
+
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = self.substream_id.0.clone().to_vec();
         bytes.push(self.message_type.to_u8());

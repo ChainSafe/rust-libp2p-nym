@@ -52,6 +52,8 @@ pub enum Error {
     InvalidSubstreamMessageType,
     #[error("substrean with given ID already exists")]
     SubstreamIdExists(SubstreamId),
+    #[error("no substream found for given ID")]
+    SubstreamIdDoesNotExist(SubstreamId),
     #[error("recv error: channel closed")]
     OneshotRecvError(#[from] tokio::sync::oneshot::error::RecvError),
     #[error("failed to send new substream; receiver dropped")]

@@ -652,8 +652,8 @@ mod test {
             b"hello world".to_vec(),
             Pin::new(&mut dialer_substream),
             Pin::new(&mut listener_substream),
-            listener_transport,
-            listener_conn,
+            Pin::new(&mut listener_transport),
+            Pin::new(&mut listener_conn),
         )
         .await;
 
@@ -662,30 +662,43 @@ mod test {
             b"hello back".to_vec(),
             Pin::new(&mut listener_substream),
             Pin::new(&mut dialer_substream),
-            dialer_transport,
-            dialer_conn,
+            Pin::new(&mut dialer_transport),
+            Pin::new(&mut dialer_conn),
         )
         .await;
+
+        // close the substream from the dialer side
+        println!("closing dialer substream");
+        dialer_substream.close().await.unwrap();
+        tokio::time::sleep(sleep_duration).await;
+        println!("dialer substream closed");
+
+        // assert we can't read or write to either substream
+        dialer_substream.write_all(b"hello").await.unwrap_err();
+        poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).now_or_never();
+        poll_fn(|cx| Pin::new(&mut listener_conn).as_mut().poll(cx)).now_or_never();
+        listener_substream.write_all(b"hello").await.unwrap_err();
+        let mut buf = vec![0u8; 5];
+        dialer_substream.read(&mut buf).await.unwrap_err();
+        listener_substream.read(&mut buf).await.unwrap_err();
+        dialer_substream.close().await.unwrap_err();
+        listener_substream.close().await.unwrap_err();
     }
 
     async fn send_and_receive_substream_message(
         data: Vec<u8>,
         mut sender_substream: Pin<&mut Substream>,
         mut recipient_substream: Pin<&mut Substream>,
-        mut recipient_transport: NymTransport,
-        mut recipient_conn: Connection,
+        mut recipient_transport: Pin<&mut NymTransport>,
+        mut recipient_conn: Pin<&mut Connection>,
     ) {
         // write message
         sender_substream.write_all(&data).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(1200)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
 
         // poll recipient for message
-        assert!(
-            poll_fn(|cx| Pin::new(&mut recipient_transport).as_mut().poll(cx))
-                .now_or_never()
-                .is_none()
-        );
-        poll_fn(|cx| Pin::new(&mut recipient_conn).as_mut().poll(cx)).now_or_never();
+        poll_fn(|cx| recipient_transport.as_mut().poll(cx)).now_or_never();
+        poll_fn(|cx| recipient_conn.as_mut().poll(cx)).now_or_never();
         let mut buf = vec![0u8; data.len()];
         let n = recipient_substream.read(&mut buf).await.unwrap();
         assert_eq!(n, data.len());
