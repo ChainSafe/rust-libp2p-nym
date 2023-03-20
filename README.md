@@ -10,8 +10,11 @@ Ensure that docker is installed on the machine where the tests need to be run.
 
 Then, run the following as usual.
 ```
-cargo test
+DOCKER_BUILD=1 cargo test
 ```
+
+Note that if you've already built the docker image and want to avoid this step,
+you can ignore the `DOCKER_BUILD` environment variable.
 
 ### Writing New Tests
 
