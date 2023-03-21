@@ -135,7 +135,7 @@ impl TransportMessage {
     }
 
     fn try_from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.len() < CONNECTION_ID_LENGTH {
+        if bytes.len() < CONNECTION_ID_LENGTH + 1 {
             return Err(Error::TransportMessageBytesTooShort);
         }
 
@@ -205,7 +205,12 @@ impl SubstreamMessage {
             0 => SubstreamMessageType::OpenRequest,
             1 => SubstreamMessageType::OpenResponse,
             2 => SubstreamMessageType::Close,
-            3 => SubstreamMessageType::Data(bytes[SUBSTREAM_ID_LENGTH + 1..].to_vec()),
+            3 => {
+                if bytes.len() < SUBSTREAM_ID_LENGTH + 2 {
+                    return Err(Error::InvalidSubstreamMessageBytes);
+                }
+                SubstreamMessageType::Data(bytes[SUBSTREAM_ID_LENGTH + 1..].to_vec())
+            }
             _ => return Err(Error::InvalidSubstreamMessageType),
         };
 

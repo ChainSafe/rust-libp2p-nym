@@ -1,4 +1,4 @@
-use futures::{future::BoxFuture, prelude::*};
+use futures::prelude::*;
 use libp2p_core::{
     multiaddr::{Multiaddr, Protocol},
     transport::{ListenerId, TransportError, TransportEvent},
@@ -18,7 +18,7 @@ use tokio::sync::{
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::debug;
 
-use crate::connection::{Connection, InnerConnection, PendingConnection};
+use crate::connection::{Connection, PendingConnection};
 use crate::error::Error;
 use crate::message::{
     ConnectionId, ConnectionMessage, InboundMessage, Message, OutboundMessage, SubstreamMessage,
@@ -40,8 +40,9 @@ pub struct NymTransport {
     pub(crate) listen_addr: Multiaddr,
     pub(crate) listener_id: ListenerId,
 
-    /// established connections
-    connections: HashMap<ConnectionId, InnerConnection>,
+    /// established connections -> channel which sends messages received from
+    /// the mixnet to the corresponding Connection
+    connections: HashMap<ConnectionId, UnboundedSender<SubstreamMessage>>,
 
     /// outbound pending dials
     pending_dials: HashMap<ConnectionId, PendingConnection>,
@@ -64,15 +65,6 @@ pub struct NymTransport {
 impl NymTransport {
     pub async fn new(uri: &String) -> Result<Self, Error> {
         Self::new_maybe_with_notify_inbound(uri, None).await
-    }
-
-    // this is only used in tests
-    #[allow(dead_code)]
-    pub(crate) async fn new_with_notify_inbound(
-        uri: &String,
-        notify_inbound_tx: UnboundedSender<()>,
-    ) -> Result<Self, Error> {
-        Self::new_maybe_with_notify_inbound(uri, Some(notify_inbound_tx)).await
     }
 
     async fn new_maybe_with_notify_inbound(
@@ -173,8 +165,8 @@ impl NymTransport {
     }
 
     fn handle_transport_message(&self, msg: TransportMessage) -> Result<(), Error> {
-        if let Some(conn) = self.connections.get(&msg.id) {
-            conn.inbound_tx
+        if let Some(inbound_tx) = self.connections.get(&msg.id) {
+            inbound_tx
                 .send(msg.message)
                 .map_err(|e| Error::InboundSendError(e.to_string()))?;
 
@@ -192,17 +184,14 @@ impl NymTransport {
         &self,
         recipient: Recipient,
         id: ConnectionId,
-    ) -> (Connection, InnerConnection) {
+    ) -> (Connection, UnboundedSender<SubstreamMessage>) {
         let (inbound_tx, inbound_rx) = unbounded_channel::<SubstreamMessage>();
 
-        // "outer" representation of a connection; this contains channels for applications to read/write to.
+        // representation of a connection; this contains channels for applications to read/write to.
         let conn = Connection::new(recipient, id, inbound_rx, self.outbound_tx.clone());
 
-        // "inner" representation of a connection; this is what we
-        // read/write to when receiving messages on the mixnet,
-        // or we get outbound messages from an application.
-        let inner_conn = InnerConnection::new(recipient, inbound_tx);
-        (conn, inner_conn)
+        // inbound_tx is what we write to when receiving messages on the mixnet,
+        (conn, inbound_tx)
     }
 
     /// handle_inbound handles an inbound message from the mixnet, received via self.inbound_stream.
@@ -266,7 +255,7 @@ impl Transport for NymTransport {
     type Output = Connection; // TODO: this probably needs to be (PeerId, Connection)
     type Error = Error;
     type ListenerUpgrade = Upgrade;
-    type Dial = BoxFuture<'static, Result<Self::Output, Self::Error>>;
+    type Dial = Pin<Box<dyn Future<Output = Result<Self::Output, Self::Error>> + Send>>;
 
     fn listen_on(&mut self, _: Multiaddr) -> Result<ListenerId, TransportError<Self::Error>> {
         // we should only allow listening on the multiaddress containing our Nym address
@@ -401,7 +390,11 @@ fn multiaddress_to_nym_address(multiaddr: Multiaddr) -> Result<Recipient, Error>
 #[cfg(test)]
 mod test {
     use crate::connection::Connection;
-    use crate::message::{SubstreamId, SubstreamMessage, SubstreamMessageType};
+    use crate::error::Error;
+    use crate::message::{
+        Message, OutboundMessage, SubstreamId, SubstreamMessage, SubstreamMessageType,
+        TransportMessage,
+    };
     use crate::new_nym_client;
     use crate::substream::Substream;
 
@@ -413,9 +406,33 @@ mod test {
     };
     use std::pin::Pin;
     use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
-    use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+    use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
     use tracing::info;
     use tracing_subscriber::EnvFilter;
+
+    impl Connection {
+        fn write(&self, msg: SubstreamMessage) -> Result<(), Error> {
+            self.mixnet_outbound_tx
+                .send(OutboundMessage {
+                    recipient: self.remote_recipient,
+                    message: Message::TransportMessage(TransportMessage {
+                        id: self.id.clone(),
+                        message: msg,
+                    }),
+                })
+                .map_err(|e| Error::OutboundSendError(e.to_string()))?;
+            Ok(())
+        }
+    }
+
+    impl NymTransport {
+        async fn new_with_notify_inbound(
+            uri: &String,
+            notify_inbound_tx: UnboundedSender<()>,
+        ) -> Result<Self, Error> {
+            Self::new_maybe_with_notify_inbound(uri, Some(notify_inbound_tx)).await
+        }
+    }
 
     #[tokio::test]
     async fn test_transport_connection() {

@@ -1,4 +1,4 @@
-use futures::future::BoxFuture;
+use futures::prelude::*;
 use libp2p_core::{muxing::StreamMuxerEvent, StreamMuxer};
 use nym_sphinx::addressing::clients::Recipient;
 use std::{
@@ -22,10 +22,9 @@ use crate::substream::Substream;
 /// Connection represents the result of a connection setup process.
 /// It implements `StreamMuxer` and thus has stream multiplexing built in.
 #[derive(Debug)]
-#[allow(dead_code)] // TODO: remove later
 pub struct Connection {
-    remote_recipient: Recipient,
-    id: ConnectionId,
+    pub(crate) remote_recipient: Recipient,
+    pub(crate) id: ConnectionId,
 
     /// receive inbound messages from the `InnerConnection`
     pub(crate) inbound_rx: UnboundedReceiver<SubstreamMessage>,
@@ -92,31 +91,20 @@ impl Connection {
         }
     }
 
-    /// this is only used in tests right now
-    #[allow(dead_code)]
-    pub(crate) fn write(&self, msg: SubstreamMessage) -> Result<(), Error> {
-        self.mixnet_outbound_tx
-            .send(OutboundMessage {
-                recipient: self.remote_recipient,
-                message: Message::TransportMessage(TransportMessage {
-                    id: self.id.clone(),
-                    message: msg,
-                }),
-            })
-            .map_err(|e| Error::OutboundSendError(e.to_string()))?;
-        Ok(())
-    }
-
     /// attempts to open a new stream over the connection; returns a future that resolves when the stream is established.
-    pub fn new_stream(&mut self) -> Result<BoxFuture<'static, Result<(), Error>>, Error> {
+    #[allow(clippy::type_complexity)]
+    pub fn new_stream(
+        &mut self,
+    ) -> Result<Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>, Error> {
         let substream_id = SubstreamId::generate();
         self.new_stream_with_id(substream_id)
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn new_stream_with_id(
         &mut self,
         substream_id: SubstreamId,
-    ) -> Result<BoxFuture<'static, Result<(), Error>>, Error> {
+    ) -> Result<Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>, Error> {
         // send the substream open request that requests to open a substream with the given ID
         self.mixnet_outbound_tx
             .send(OutboundMessage {
@@ -291,28 +279,6 @@ impl StreamMuxer for Connection {
 
         self.waker = Some(cx.waker().clone());
         Poll::Pending
-    }
-}
-
-/// InnerConnection is the transport's internal representation of
-/// a Connection; it contains channels that interact with the mixnet.
-#[allow(dead_code)] // TODO: remove later
-pub(crate) struct InnerConnection {
-    pub(crate) remote_recipient: Recipient,
-
-    /// receives messages from the mixnet and sends to the `Connection`
-    pub(crate) inbound_tx: UnboundedSender<SubstreamMessage>,
-}
-
-impl InnerConnection {
-    pub(crate) fn new(
-        remote_recipient: Recipient,
-        inbound_tx: UnboundedSender<SubstreamMessage>,
-    ) -> Self {
-        InnerConnection {
-            remote_recipient,
-            inbound_tx,
-        }
     }
 }
 
