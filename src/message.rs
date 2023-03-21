@@ -5,9 +5,10 @@ use crate::error::Error;
 
 const RECIPIENT_LENGTH: usize = Recipient::LEN;
 const CONNECTION_ID_LENGTH: usize = 32;
+const SUBSTREAM_ID_LENGTH: usize = 32;
 
 /// ConnectionId is a unique, randomly-generated per-connection ID that's used to
-/// identity which connection a message belongs to.
+/// identify which connection a message belongs to.
 #[derive(Clone, Default, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ConnectionId([u8; 32]);
 
@@ -22,6 +23,25 @@ impl ConnectionId {
         let mut id = [0u8; 32];
         id[..].copy_from_slice(&bytes[0..CONNECTION_ID_LENGTH]);
         ConnectionId(id)
+    }
+}
+
+/// SubstreamId is a unique, randomly-generated per-substream ID that's used to
+/// identify which substream a message belongs to.
+#[derive(Clone, Default, Debug, Eq, Hash, PartialEq)]
+pub struct SubstreamId(pub(crate) [u8; 32]);
+
+impl SubstreamId {
+    pub(crate) fn generate() -> Self {
+        let mut bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut bytes);
+        SubstreamId(bytes)
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Self {
+        let mut id = [0u8; 32];
+        id[..].copy_from_slice(&bytes[0..SUBSTREAM_ID_LENGTH]);
+        SubstreamId(id)
     }
 }
 
@@ -43,9 +63,9 @@ pub(crate) struct ConnectionMessage {
 }
 
 /// TransportMessage is sent over a connection after establishment.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub(crate) struct TransportMessage {
-    pub(crate) message: Vec<u8>,
+    pub(crate) message: SubstreamMessage,
     pub(crate) id: ConnectionId,
 }
 
@@ -110,18 +130,94 @@ impl ConnectionMessage {
 impl TransportMessage {
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = self.id.0.to_vec();
-        bytes.append(&mut self.message.clone());
+        bytes.extend_from_slice(&self.message.to_bytes());
         bytes
     }
 
     fn try_from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.len() < CONNECTION_ID_LENGTH {
+        if bytes.len() < CONNECTION_ID_LENGTH + 1 {
             return Err(Error::TransportMessageBytesTooShort);
         }
 
         let id = ConnectionId::from_bytes(&bytes[0..CONNECTION_ID_LENGTH]);
-        let message = bytes[CONNECTION_ID_LENGTH..].to_vec();
+        let message = SubstreamMessage::try_from_bytes(&bytes[CONNECTION_ID_LENGTH..])?;
         Ok(TransportMessage { message, id })
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum SubstreamMessageType {
+    OpenRequest,
+    OpenResponse,
+    Close,
+    Data(Vec<u8>),
+}
+
+impl SubstreamMessageType {
+    fn to_u8(&self) -> u8 {
+        match self {
+            SubstreamMessageType::OpenRequest => 0,
+            SubstreamMessageType::OpenResponse => 1,
+            SubstreamMessageType::Close => 2,
+            SubstreamMessageType::Data(_) => 3,
+        }
+    }
+}
+
+/// SubstreamMessage is a message sent over a substream.
+#[derive(Debug)]
+pub(crate) struct SubstreamMessage {
+    pub(crate) substream_id: SubstreamId,
+    pub(crate) message_type: SubstreamMessageType,
+}
+
+impl SubstreamMessage {
+    pub(crate) fn new_with_data(substream_id: SubstreamId, message: Vec<u8>) -> Self {
+        SubstreamMessage {
+            substream_id,
+            message_type: SubstreamMessageType::Data(message),
+        }
+    }
+
+    pub(crate) fn new_close(substream_id: SubstreamId) -> Self {
+        SubstreamMessage {
+            substream_id,
+            message_type: SubstreamMessageType::Close,
+        }
+    }
+
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = self.substream_id.0.clone().to_vec();
+        bytes.push(self.message_type.to_u8());
+        if let SubstreamMessageType::Data(message) = &self.message_type {
+            bytes.extend_from_slice(message);
+        }
+        bytes
+    }
+
+    pub(crate) fn try_from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        if bytes.len() < SUBSTREAM_ID_LENGTH + 1 {
+            return Err(Error::InvalidSubstreamMessageBytes);
+        }
+
+        let substream_id = SubstreamId::from_bytes(&bytes[0..SUBSTREAM_ID_LENGTH]);
+        let message_type = match bytes[SUBSTREAM_ID_LENGTH] {
+            0 => SubstreamMessageType::OpenRequest,
+            1 => SubstreamMessageType::OpenResponse,
+            2 => SubstreamMessageType::Close,
+            3 => {
+                if bytes.len() < SUBSTREAM_ID_LENGTH + 2 {
+                    return Err(Error::InvalidSubstreamMessageBytes);
+                }
+                SubstreamMessageType::Data(bytes[SUBSTREAM_ID_LENGTH + 1..].to_vec())
+            }
+            _ => return Err(Error::InvalidSubstreamMessageType),
+        };
+
+        Ok(SubstreamMessage {
+            substream_id,
+            message_type,
+        })
     }
 }
 
