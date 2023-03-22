@@ -1,3 +1,4 @@
+use futures::future::MapErr;
 use futures::prelude::*;
 use libp2p_core::{
     multiaddr::{Multiaddr, Protocol},
@@ -202,7 +203,10 @@ impl NymTransport {
                 match self.handle_connection_request(inner) {
                     Ok(conn) => {
                         let (connection_tx, connection_rx) = oneshot::channel::<Connection>();
-                        let upgrade = Upgrade::new(connection_rx);
+                        let upgrade = connection_rx
+                            .map_err::<Error, fn(oneshot::error::RecvError) -> Error>(
+                                crate::error::Error::from,
+                            );
                         connection_tx
                             .send(conn)
                             .map_err(|_| Error::ConnectionSendError)?;
@@ -225,31 +229,8 @@ impl NymTransport {
     }
 }
 
-/// Upgrade represents a transport listener upgrade.
-/// Note: we immediately upgrade a connection request to a connection,
-/// so this only contains a channel for receiving that connection.
-pub struct Upgrade {
-    connection_tx: oneshot::Receiver<Connection>,
-}
-
-impl Upgrade {
-    fn new(connection_tx: oneshot::Receiver<Connection>) -> Upgrade {
-        Upgrade { connection_tx }
-    }
-}
-
-impl Future for Upgrade {
-    type Output = Result<Connection, Error>;
-
-    // poll checks if the upgrade has turned into a connection yet
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Poll::Ready(Ok(conn)) = self.connection_tx.poll_unpin(cx) {
-            return Poll::Ready(Ok(conn));
-        }
-
-        Poll::Pending
-    }
-}
+pub type Upgrade =
+    MapErr<oneshot::Receiver<Connection>, fn(tokio::sync::oneshot::error::RecvError) -> Error>;
 
 impl Transport for NymTransport {
     type Output = Connection; // TODO: this probably needs to be (PeerId, Connection)
