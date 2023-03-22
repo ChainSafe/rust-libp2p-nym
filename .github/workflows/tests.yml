@@ -15,7 +15,7 @@ jobs:
     - name: Build
       run: cargo build --all
     - name: Run tests
-      run: cargo test -- --test-threads=1
+      run: DOCKER_BUILD=1 cargo test
 
 
   fmt:
