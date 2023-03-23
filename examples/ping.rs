@@ -44,17 +44,22 @@ use futures::StreamExt;
 use libp2p::swarm::{keep_alive, NetworkBehaviour, Swarm, SwarmEvent};
 use libp2p::{identity, ping, Multiaddr, PeerId};
 use libp2p_core::{muxing::StreamMuxerBox, transport::Transport};
-use rust_libp2p_nym::transport::NymTransport;
+use rust_libp2p_nym::{new_nym_client, transport::NymTransport};
 use std::error::Error;
+use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let nym_id = rand::random::<u64>().to_string();
+    #[allow(unused)]
+    let dialer_uri: String;
+    new_nym_client!(nym_id, dialer_uri);
+
     let local_key = identity::Keypair::generate_ed25519();
     let local_peer_id = PeerId::from(local_key.public());
     println!("Local peer id: {local_peer_id:?}");
 
-    let transport = NymTransport::new(&"ws://127.0.0.1:1977".to_string()).await?;
-    //libp2p::development_transport(local_key).await?;
+    let transport = NymTransport::new(&dialer_uri, local_key).await?;
 
     let mut swarm = Swarm::with_tokio_executor(
         transport
@@ -63,10 +68,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Behaviour::default(),
         local_peer_id,
     );
-
-    // Tell the swarm to listen on all interfaces and a random, OS-assigned
-    // port.
-    swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
     // Dial the peer identified by the multi-address given as the second
     // command-line argument, if any.

@@ -1,5 +1,6 @@
 use futures::prelude::*;
 use libp2p_core::{
+    identity::Keypair,
     multiaddr::{Multiaddr, Protocol},
     transport::{ListenerId, TransportError, TransportEvent},
     PeerId, Transport,
@@ -40,6 +41,9 @@ pub struct NymTransport {
     pub(crate) listen_addr: Multiaddr,
     pub(crate) listener_id: ListenerId,
 
+    /// our libp2p keypair; currently not really used
+    keypair: Keypair,
+
     /// established connections -> channel which sends messages received from
     /// the mixnet to the corresponding Connection
     connections: HashMap<ConnectionId, UnboundedSender<SubstreamMessage>>,
@@ -63,12 +67,13 @@ pub struct NymTransport {
 }
 
 impl NymTransport {
-    pub async fn new(uri: &String) -> Result<Self, Error> {
-        Self::new_maybe_with_notify_inbound(uri, None).await
+    pub async fn new(uri: &String, keypair: Keypair) -> Result<Self, Error> {
+        Self::new_maybe_with_notify_inbound(uri, keypair, None).await
     }
 
     async fn new_maybe_with_notify_inbound(
         uri: &String,
+        keypair: Keypair,
         notify_inbound_tx: Option<UnboundedSender<()>>,
     ) -> Result<Self, Error> {
         let (self_address, inbound_rx, outbound_tx) =
@@ -91,6 +96,7 @@ impl NymTransport {
             self_address,
             listen_addr,
             listener_id,
+            keypair,
             connections: HashMap::new(),
             pending_dials: HashMap::new(),
             inbound_stream,
@@ -201,10 +207,11 @@ impl NymTransport {
                 debug!("got connection request {:?}", inner);
                 match self.handle_connection_request(inner) {
                     Ok(conn) => {
-                        let (connection_tx, connection_rx) = oneshot::channel::<Connection>();
+                        let (connection_tx, connection_rx) =
+                            oneshot::channel::<(PeerId, Connection)>();
                         let upgrade = Upgrade::new(connection_rx);
                         connection_tx
-                            .send(conn)
+                            .send((PeerId::from(self.keypair.public()), conn))
                             .map_err(|_| Error::ConnectionSendError)?;
                         Ok(InboundTransportEvent::ConnectionRequest(upgrade))
                     }
@@ -229,11 +236,11 @@ impl NymTransport {
 /// Note: we immediately upgrade a connection request to a connection,
 /// so this only contains a channel for receiving that connection.
 pub struct Upgrade {
-    connection_tx: oneshot::Receiver<Connection>,
+    connection_tx: oneshot::Receiver<(PeerId, Connection)>,
 }
 
 impl Upgrade {
-    fn new(connection_tx: oneshot::Receiver<Connection>) -> Upgrade {
+    fn new(connection_tx: oneshot::Receiver<(PeerId, Connection)>) -> Upgrade {
         Upgrade { connection_tx }
     }
 }
@@ -243,12 +250,9 @@ impl Future for Upgrade {
 
     // poll checks if the upgrade has turned into a connection yet
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Poll::Ready(Ok(conn)) = self.connection_tx.poll_unpin(cx) {
-            let peer_id = PeerId::random();
-            return Poll::Ready(Ok((peer_id, conn)));
-        }
-
-        Poll::Pending
+        self.connection_tx
+            .poll_unpin(cx)
+            .map_err(|_| Error::RecvError)
     }
 }
 
@@ -301,6 +305,7 @@ impl Transport for NymTransport {
         let outbound_tx = self.outbound_tx.clone();
 
         let mut waker = self.waker.clone();
+        let peer_id = PeerId::from_public_key(&self.keypair.public());
         Ok(async move {
             outbound_tx
                 .send(OutboundMessage {
@@ -316,7 +321,7 @@ impl Transport for NymTransport {
 
             // TODO: response timeout
             let conn = connection_rx.await.map_err(Error::OneshotRecvError)?;
-            Ok((PeerId::random(), conn))
+            Ok((peer_id, conn))
         }
         .boxed())
     }
@@ -402,6 +407,7 @@ mod test {
     use super::{nym_address_to_multiaddress, NymTransport};
     use futures::{future::poll_fn, AsyncReadExt, AsyncWriteExt, FutureExt};
     use libp2p_core::{
+        identity::Keypair,
         transport::{Transport, TransportEvent},
         StreamMuxer,
     };
@@ -431,7 +437,8 @@ mod test {
             uri: &String,
             notify_inbound_tx: UnboundedSender<()>,
         ) -> Result<Self, Error> {
-            Self::new_maybe_with_notify_inbound(uri, Some(notify_inbound_tx)).await
+            let local_key = Keypair::generate_ed25519();
+            Self::new_maybe_with_notify_inbound(uri, local_key, Some(notify_inbound_tx)).await
         }
     }
 
