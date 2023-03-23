@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let local_peer_id = PeerId::from(local_key.public());
     println!("Local peer id: {local_peer_id:?}");
 
-    let transport = NymTransport::new(&"127.0.0.1:1977".to_string()).await?;
+    let transport = NymTransport::new(&"ws://127.0.0.1:1977".to_string()).await?;
     //libp2p::development_transport(local_key).await?;
 
     let mut swarm = Swarm::with_tokio_executor(
