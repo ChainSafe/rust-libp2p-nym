@@ -21,6 +21,7 @@ use crate::message::*;
 /// It starts a task that listens for inbound messages from the endpoint and writes outbound messages to the endpoint.
 pub(crate) async fn initialize_mixnet(
     uri: &String,
+    notify_inbound_tx: Option<UnboundedSender<()>>,
 ) -> Result<
     (
         Recipient,
@@ -47,7 +48,7 @@ pub(crate) async fn initialize_mixnet(
 
     tokio::task::spawn(async move {
         loop {
-            let t1 = check_inbound(&mut stream, &inbound_tx).fuse();
+            let t1 = check_inbound(&mut stream, &inbound_tx, &notify_inbound_tx).fuse();
             let t2 = check_outbound(&mut sink, &mut outbound_rx).fuse();
 
             pin_mut!(t1, t2);
@@ -69,9 +70,16 @@ pub(crate) async fn initialize_mixnet(
 async fn check_inbound(
     ws_stream: &mut SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
     inbound_tx: &UnboundedSender<InboundMessage>,
+    notify_inbound_tx: &Option<UnboundedSender<()>>,
 ) -> Result<(), Error> {
     if let Some(res) = ws_stream.next().await {
-        debug!("got inbound message from mixnet: {:?}", res);
+        debug!("got inbound message from mixnet");
+        if let Some(notify_tx) = notify_inbound_tx {
+            notify_tx
+                .send(())
+                .map_err(|e| Error::InboundSendError(e.to_string()))?;
+        }
+
         match res {
             Ok(msg) => return handle_inbound(msg, inbound_tx).await,
             Err(e) => return Err(Error::WebsocketStreamError(e)),
@@ -87,17 +95,15 @@ async fn handle_inbound(
 ) -> Result<(), Error> {
     let res = parse_nym_message(msg)?;
     let msg_bytes = match res {
-        ServerResponse::Received(msg_bytes) => {
-            debug!("received request {:?}", msg_bytes);
-            msg_bytes
-        }
+        ServerResponse::Received(msg_bytes) => msg_bytes,
         ServerResponse::Error(e) => return Err(Error::NymMessageError(e.to_string())),
         _ => return Err(Error::UnexpectedNymMessage),
     };
     let data = parse_message_data(&msg_bytes.message)?;
     inbound_tx
         .send(data)
-        .map_err(|e| Error::InboundSendError(e.to_string()))
+        .map_err(|e| Error::InboundSendError(e.to_string()))?;
+    Ok(())
 }
 
 async fn check_outbound(
@@ -169,32 +175,28 @@ fn parse_nym_message(msg: Message) -> Result<ServerResponse, Error> {
 
 #[cfg(test)]
 mod test {
-    use crate::message::{self, ConnectionId, Message, TransportMessage};
+    use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
+
+    use crate::message::{
+        self, ConnectionId, Message, SubstreamId, SubstreamMessage, SubstreamMessageType,
+        TransportMessage,
+    };
     use crate::mixnet::initialize_mixnet;
-    use testcontainers::clients;
-    use testcontainers::core::WaitFor;
-    use testcontainers::images::generic::GenericImage;
+    use crate::new_nym_client;
 
     #[tokio::test]
     async fn test_mixnet_poll_inbound_and_outbound() {
-        // This section instantiates docker containers of the nym-client
-        // so that tests can be run with all the necessary resources.
-        // This removes the requirement for having to limit test threads
-        // or to build/run nym-client ourselves.
-        let docker_client = clients::Cli::default();
-        let nym_ready_message = WaitFor::message_on_stderr("Client startup finished!");
-        let nym_image = GenericImage::new("nym", "latest")
-            .with_env_var("NYM_ID", "test_connection")
-            .with_wait_for(nym_ready_message)
-            .with_exposed_port(1977);
-        let nym_container = docker_client.run(nym_image);
-        let nym_port = nym_container.get_host_port_ipv4(1977);
-        let uri = format!("ws://0.0.0.0:{nym_port}");
-        let (self_address, mut inbound_rx, outbound_tx) = initialize_mixnet(&uri).await.unwrap();
+        let nym_id = "test_mixnet_poll_inbound_and_outbound";
+        #[allow(unused)]
+        let uri: String;
+        new_nym_client!(nym_id, uri);
+        let (self_address, mut inbound_rx, outbound_tx) =
+            initialize_mixnet(&uri, None).await.unwrap();
         let msg_inner = "hello".as_bytes();
+        let substream_id = SubstreamId::generate();
         let msg = Message::TransportMessage(TransportMessage {
             id: ConnectionId::generate(),
-            message: msg_inner.to_vec(),
+            message: SubstreamMessage::new_with_data(substream_id.clone(), msg_inner.to_vec()),
         });
 
         // send a message to ourselves through the mixnet
@@ -208,7 +210,12 @@ mod test {
         // receive the message from ourselves over the mixnet
         let received_msg = inbound_rx.recv().await.unwrap();
         if let Message::TransportMessage(recv_msg) = received_msg.0 {
-            assert_eq!(msg_inner, recv_msg.message);
+            assert_eq!(substream_id, recv_msg.message.substream_id);
+            if let SubstreamMessageType::Data(data) = recv_msg.message.message_type {
+                assert_eq!(msg_inner, data.as_slice());
+            } else {
+                panic!("expected SubstreamMessage::Data")
+            }
         } else {
             panic!("expected Message::TransportMessage")
         }
