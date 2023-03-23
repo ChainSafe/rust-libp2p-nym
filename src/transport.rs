@@ -2,7 +2,7 @@ use futures::prelude::*;
 use libp2p_core::{
     multiaddr::{Multiaddr, Protocol},
     transport::{ListenerId, TransportError, TransportEvent},
-    Transport,
+    PeerId, Transport,
 };
 use nym_sphinx::addressing::clients::Recipient;
 use std::{
@@ -239,12 +239,13 @@ impl Upgrade {
 }
 
 impl Future for Upgrade {
-    type Output = Result<Connection, Error>;
+    type Output = Result<(PeerId, Connection), Error>;
 
     // poll checks if the upgrade has turned into a connection yet
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if let Poll::Ready(Ok(conn)) = self.connection_tx.poll_unpin(cx) {
-            return Poll::Ready(Ok(conn));
+            let peer_id = PeerId::random();
+            return Poll::Ready(Ok((peer_id, conn)));
         }
 
         Poll::Pending
@@ -252,7 +253,7 @@ impl Future for Upgrade {
 }
 
 impl Transport for NymTransport {
-    type Output = Connection; // TODO: this probably needs to be (PeerId, Connection)
+    type Output = (PeerId, Connection); // TODO: this probably needs to be (PeerId, Connection)
     type Error = Error;
     type ListenerUpgrade = Upgrade;
     type Dial = Pin<Box<dyn Future<Output = Result<Self::Output, Self::Error>> + Send>>;
@@ -315,7 +316,7 @@ impl Transport for NymTransport {
 
             // TODO: response timeout
             let conn = connection_rx.await.map_err(Error::OneshotRecvError)?;
-            Ok(conn)
+            Ok((PeerId::random(), conn))
         }
         .boxed())
     }
@@ -502,11 +503,11 @@ mod test {
         info!("waiting for connections...");
 
         // should be able to resolve the connections now
-        let mut listener_conn = poll_fn(|cx| Pin::new(&mut upgrade).as_mut().poll_unpin(cx))
+        let (_, mut listener_conn) = poll_fn(|cx| Pin::new(&mut upgrade).as_mut().poll_unpin(cx))
             .now_or_never()
             .unwrap()
             .unwrap();
-        let mut dialer_conn = poll_fn(|cx| Pin::new(&mut dial).as_mut().poll_unpin(cx))
+        let (_, mut dialer_conn) = poll_fn(|cx| Pin::new(&mut dial).as_mut().poll_unpin(cx))
             .now_or_never()
             .unwrap()
             .unwrap();
@@ -643,11 +644,11 @@ mod test {
         info!("waiting for connections...");
 
         // should be able to resolve the connections now
-        let mut listener_conn = poll_fn(|cx| Pin::new(&mut upgrade).as_mut().poll_unpin(cx))
+        let (_, mut listener_conn) = poll_fn(|cx| Pin::new(&mut upgrade).as_mut().poll_unpin(cx))
             .now_or_never()
             .unwrap()
             .unwrap();
-        let mut dialer_conn = poll_fn(|cx| Pin::new(&mut dial).as_mut().poll_unpin(cx))
+        let (_, mut dialer_conn) = poll_fn(|cx| Pin::new(&mut dial).as_mut().poll_unpin(cx))
             .now_or_never()
             .unwrap()
             .unwrap();
