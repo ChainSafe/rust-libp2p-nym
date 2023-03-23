@@ -1,9 +1,8 @@
 use std::env;
 use std::process::Command;
+
 fn main() {
-    println!("cargo:rerun-if-changed=Dockerfile.nym");
-    let docker_build = env::var("DOCKER_BUILD").is_ok();
-    if docker_build {
+    if env::var("DOCKER_BUILD").is_ok() {
         let output = Command::new("docker")
             .arg("build")
             .arg("-t")
