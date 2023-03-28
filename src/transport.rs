@@ -1,5 +1,5 @@
 use futures::prelude::*;
-use libp2p_core::{
+use libp2p::core::{
     identity::Keypair,
     multiaddr::{Multiaddr, Protocol},
     transport::{ListenerId, TransportError, TransportEvent},
@@ -107,23 +107,30 @@ impl NymTransport {
         })
     }
 
+    pub(crate) fn peer_id(&self) -> PeerId {
+        PeerId::from_public_key(&self.keypair.public())
+    }
+
     // handle_connection_response resolves the pending connection corresponding to the response
     // (if there is one) into a Connection.
-    fn handle_connection_response(&mut self, msg: ConnectionMessage) -> Result<(), Error> {
+    fn handle_connection_response(&mut self, msg: &ConnectionMessage) -> Result<(), Error> {
         if self.connections.contains_key(&msg.id) {
             return Err(Error::ConnectionAlreadyEstablished);
         }
 
         if let Some(pending_conn) = self.pending_dials.remove(&msg.id) {
             // resolve connection and put into pending_conn channel
-            let (conn, inner_conn) =
-                self.create_connection_types(pending_conn.remote_recipient, msg.id.clone());
+            let (conn, inner_conn) = self.create_connection_types(
+                msg.peer_id,
+                pending_conn.remote_recipient,
+                msg.id.clone(),
+            );
 
             pending_conn
                 .connection_tx
                 .send(conn)
                 .map_err(|_| Error::ConnectionSendError)?;
-            self.connections.insert(msg.id, inner_conn);
+            self.connections.insert(msg.id.clone(), inner_conn);
 
             if let Some(waker) = self.waker.take() {
                 waker.wake();
@@ -137,7 +144,7 @@ impl NymTransport {
 
     /// handle_connection_request handles an incoming connection request, sends back a
     /// connection response, and finally completes the upgrade into a Connection.
-    fn handle_connection_request(&mut self, msg: ConnectionMessage) -> Result<Connection, Error> {
+    fn handle_connection_request(&mut self, msg: &ConnectionMessage) -> Result<Connection, Error> {
         if msg.recipient.is_none() {
             return Err(Error::NoneRecipientInConnectionRequest);
         }
@@ -148,8 +155,9 @@ impl NymTransport {
         }
 
         let (conn, inner_conn) =
-            self.create_connection_types(msg.recipient.unwrap(), msg.id.clone());
+            self.create_connection_types(msg.peer_id, msg.recipient.unwrap(), msg.id.clone());
         let resp = ConnectionMessage {
+            peer_id: self.peer_id(),
             recipient: None,
             id: msg.id.clone(),
         };
@@ -161,7 +169,7 @@ impl NymTransport {
             })
             .map_err(|e| Error::OutboundSendError(e.to_string()))?;
 
-        self.connections.insert(msg.id, inner_conn);
+        self.connections.insert(msg.id.clone(), inner_conn);
 
         if let Some(waker) = self.waker.take() {
             waker.wake();
@@ -170,10 +178,10 @@ impl NymTransport {
         Ok(conn)
     }
 
-    fn handle_transport_message(&self, msg: TransportMessage) -> Result<(), Error> {
+    fn handle_transport_message(&self, msg: &TransportMessage) -> Result<(), Error> {
         if let Some(inbound_tx) = self.connections.get(&msg.id) {
             inbound_tx
-                .send(msg.message)
+                .send(msg.message.clone())
                 .map_err(|e| Error::InboundSendError(e.to_string()))?;
 
             if let Some(waker) = self.waker.clone().take() {
@@ -188,13 +196,20 @@ impl NymTransport {
 
     fn create_connection_types(
         &self,
+        remote_peer_id: PeerId,
         recipient: Recipient,
         id: ConnectionId,
     ) -> (Connection, UnboundedSender<SubstreamMessage>) {
         let (inbound_tx, inbound_rx) = unbounded_channel::<SubstreamMessage>();
 
         // representation of a connection; this contains channels for applications to read/write to.
-        let conn = Connection::new(recipient, id, inbound_rx, self.outbound_tx.clone());
+        let conn = Connection::new(
+            remote_peer_id,
+            recipient,
+            id,
+            inbound_rx,
+            self.outbound_tx.clone(),
+        );
 
         // inbound_tx is what we write to when receiving messages on the mixnet,
         (conn, inbound_tx)
@@ -205,13 +220,13 @@ impl NymTransport {
         match msg {
             Message::ConnectionRequest(inner) => {
                 debug!("got connection request {:?}", inner);
-                match self.handle_connection_request(inner) {
+                match self.handle_connection_request(&inner) {
                     Ok(conn) => {
                         let (connection_tx, connection_rx) =
                             oneshot::channel::<(PeerId, Connection)>();
                         let upgrade = Upgrade::new(connection_rx);
                         connection_tx
-                            .send((PeerId::from(self.keypair.public()), conn))
+                            .send((inner.peer_id, conn))
                             .map_err(|_| Error::ConnectionSendError)?;
                         Ok(InboundTransportEvent::ConnectionRequest(upgrade))
                     }
@@ -220,12 +235,12 @@ impl NymTransport {
             }
             Message::ConnectionResponse(msg) => {
                 debug!("got connection response {:?}", msg);
-                self.handle_connection_response(msg)
+                self.handle_connection_response(&msg)
                     .map(|_| InboundTransportEvent::ConnectionResponse)
             }
             Message::TransportMessage(msg) => {
                 debug!("got TransportMessage: {:?}", msg);
-                self.handle_transport_message(msg)
+                self.handle_transport_message(&msg)
                     .map(|_| InboundTransportEvent::TransportMessage)
             }
         }
@@ -236,6 +251,7 @@ impl NymTransport {
 /// Note: we immediately upgrade a connection request to a connection,
 /// so this only contains a channel for receiving that connection.
 pub struct Upgrade {
+    //remote_peer_id: PeerId,
     connection_tx: oneshot::Receiver<(PeerId, Connection)>,
 }
 
@@ -298,6 +314,7 @@ impl Transport for NymTransport {
 
         // put ConnectionRequest message into outbound message channel
         let msg = ConnectionMessage {
+            peer_id: self.peer_id(),
             recipient: Some(self.self_address),
             id,
         };
@@ -305,7 +322,6 @@ impl Transport for NymTransport {
         let outbound_tx = self.outbound_tx.clone();
 
         let mut waker = self.waker.clone();
-        let peer_id = PeerId::from_public_key(&self.keypair.public());
         Ok(async move {
             outbound_tx
                 .send(OutboundMessage {
@@ -321,7 +337,8 @@ impl Transport for NymTransport {
 
             // TODO: response timeout
             let conn = connection_rx.await.map_err(Error::OneshotRecvError)?;
-            Ok((peer_id, conn))
+            debug!("received connection response");
+            Ok((conn.peer_id, conn))
         }
         .boxed())
     }
@@ -406,7 +423,7 @@ mod test {
 
     use super::{nym_address_to_multiaddress, NymTransport};
     use futures::{future::poll_fn, AsyncReadExt, AsyncWriteExt, FutureExt};
-    use libp2p_core::{
+    use libp2p::core::{
         identity::Keypair,
         transport::{Transport, TransportEvent},
         StreamMuxer,

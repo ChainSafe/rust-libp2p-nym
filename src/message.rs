@@ -1,3 +1,4 @@
+use libp2p::core::PeerId;
 use nym_sphinx::addressing::clients::Recipient;
 use rand_core::{OsRng, RngCore};
 
@@ -54,8 +55,9 @@ pub(crate) enum Message {
 }
 
 /// ConnectionMessage is exchanged to open a new connection.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub(crate) struct ConnectionMessage {
+    pub(crate) peer_id: PeerId,
     pub(crate) id: ConnectionId,
     /// recipient is the sender's Nym address.
     /// only required if this is a ConnectionRequest.
@@ -94,6 +96,7 @@ impl ConnectionMessage {
             }
             None => bytes.push(0u8),
         }
+        bytes.append(&mut self.peer_id.to_bytes());
         bytes
     }
 
@@ -123,7 +126,27 @@ impl ConnectionMessage {
                 return Err(Error::InvalidRecipientPrefixByte);
             }
         };
-        Ok(ConnectionMessage { recipient, id })
+        let peer_id = match recipient {
+            Some(_) => {
+                if bytes.len() < CONNECTION_ID_LENGTH + RECIPIENT_LENGTH + 2 {
+                    return Err(Error::ConnectionMessageBytesNoPeerId);
+                }
+                PeerId::from_bytes(&bytes[CONNECTION_ID_LENGTH + 1 + RECIPIENT_LENGTH..])
+                    .map_err(Error::InvalidPeerIdBytes)?
+            }
+            None => {
+                if bytes.len() < CONNECTION_ID_LENGTH + 2 {
+                    return Err(Error::ConnectionMessageBytesNoPeerId);
+                }
+                PeerId::from_bytes(&bytes[CONNECTION_ID_LENGTH + 1..])
+                    .map_err(Error::InvalidPeerIdBytes)?
+            }
+        };
+        Ok(ConnectionMessage {
+            peer_id,
+            recipient,
+            id,
+        })
     }
 }
 
@@ -145,7 +168,7 @@ impl TransportMessage {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum SubstreamMessageType {
     OpenRequest,
     OpenResponse,
@@ -165,7 +188,7 @@ impl SubstreamMessageType {
 }
 
 /// SubstreamMessage is a message sent over a substream.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct SubstreamMessage {
     pub(crate) substream_id: SubstreamId,
     pub(crate) message_type: SubstreamMessageType,

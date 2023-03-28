@@ -1,5 +1,5 @@
 use futures::prelude::*;
-use libp2p_core::{muxing::StreamMuxerEvent, StreamMuxer};
+use libp2p::core::{muxing::StreamMuxerEvent, PeerId, StreamMuxer};
 use nym_sphinx::addressing::clients::Recipient;
 use std::{
     collections::HashMap,
@@ -23,6 +23,7 @@ use crate::substream::Substream;
 /// It implements `StreamMuxer` and thus has stream multiplexing built in.
 #[derive(Debug)]
 pub struct Connection {
+    pub(crate) peer_id: PeerId,
     pub(crate) remote_recipient: Recipient,
     pub(crate) id: ConnectionId,
 
@@ -63,6 +64,7 @@ pub struct Connection {
 
 impl Connection {
     pub(crate) fn new(
+        peer_id: PeerId,
         remote_recipient: Recipient,
         id: ConnectionId,
         inbound_rx: UnboundedReceiver<SubstreamMessage>,
@@ -73,6 +75,7 @@ impl Connection {
         let (close_tx, close_rx) = unbounded_channel();
 
         Connection {
+            peer_id,
             remote_recipient,
             id,
             inbound_rx,
@@ -344,9 +347,13 @@ mod test {
 
         let connection_id = ConnectionId::generate();
 
+        let recipient_peer_id = PeerId::random();
+        let sender_peer_id = PeerId::random();
+
         // send SubstreamMessage::OpenRequest to the remote peer
         let (sender_inbound_tx, sender_inbound_rx) = unbounded_channel::<SubstreamMessage>();
         let mut sender_connection = Connection::new(
+            recipient_peer_id,
             recipient_address,
             connection_id.clone(),
             sender_inbound_rx,
@@ -354,6 +361,7 @@ mod test {
         );
         let (recipient_inbound_tx, recipient_inbound_rx) = unbounded_channel::<SubstreamMessage>();
         let mut recipient_connection = Connection::new(
+            sender_peer_id,
             sender_address,
             connection_id.clone(),
             recipient_inbound_rx,

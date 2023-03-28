@@ -41,15 +41,22 @@
 //! and begin pinging each other.
 
 use futures::StreamExt;
+use libp2p::core::{muxing::StreamMuxerBox, transport::Transport};
 use libp2p::swarm::{keep_alive, NetworkBehaviour, Swarm, SwarmEvent};
 use libp2p::{identity, ping, Multiaddr, PeerId};
-use libp2p_core::{muxing::StreamMuxerBox, transport::Transport};
 use rust_libp2p_nym::{new_nym_client, transport::NymTransport};
 use std::error::Error;
 use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
+        )
+        .init();
+
     let nym_id = rand::random::<u64>().to_string();
     #[allow(unused)]
     let dialer_uri: String;
