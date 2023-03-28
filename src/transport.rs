@@ -273,7 +273,7 @@ impl Future for Upgrade {
 }
 
 impl Transport for NymTransport {
-    type Output = (PeerId, Connection); // TODO: this probably needs to be (PeerId, Connection)
+    type Output = (PeerId, Connection);
     type Error = Error;
     type ListenerUpgrade = Upgrade;
     type Dial = Pin<Box<dyn Future<Output = Result<Self::Output, Self::Error>> + Send>>;
@@ -307,7 +307,7 @@ impl Transport for NymTransport {
         let recipient = multiaddress_to_nym_address(addr).map_err(TransportError::Other)?;
 
         // create pending conn structs and store
-        let (connection_tx, connection_rx) = oneshot::channel::<Connection>(); // TODO: make this bounded?
+        let (connection_tx, connection_rx) = oneshot::channel::<Connection>();
 
         let inner_pending_conn = PendingConnection::new(recipient, connection_tx);
         self.pending_dials.insert(id.clone(), inner_pending_conn);

@@ -57,7 +57,7 @@ pub struct Connection {
     close_tx: UnboundedSender<SubstreamId>,
     close_rx: UnboundedReceiver<SubstreamId>,
 
-    // TODO: more wakers?
+    // TODO: do we need more wakers?
     waker: Option<Waker>,
     outbound_waker: Option<Waker>,
 }
