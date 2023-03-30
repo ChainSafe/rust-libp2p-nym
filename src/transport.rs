@@ -221,8 +221,9 @@ impl NymTransport {
             Message::ConnectionRequest(inner) => {
                 debug!("got connection request {:?}", inner);
                 match self.handle_connection_request(&inner) {
-                    Ok(conn) => {
-                        //conn.new_stream()?;
+                    Ok(mut conn) => {
+                        // NOTE: we ignore the future here, since libp2p will handle the stream in poll_outbound
+                        conn.new_stream().ok();
                         let (connection_tx, connection_rx) =
                             oneshot::channel::<(PeerId, Connection)>();
                         let upgrade = Upgrade::new(connection_rx);
