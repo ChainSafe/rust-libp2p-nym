@@ -10,7 +10,7 @@ use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     oneshot,
 };
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::error::Error;
 use crate::message::{
@@ -181,6 +181,7 @@ impl StreamMuxer for Connection {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<Self::Substream, Self::Error>> {
+        info!("poll_inbound");
         if let Poll::Ready(Some(substream)) = self.inbound_open_rx.poll_recv(cx) {
             return Poll::Ready(Ok(substream));
         }
@@ -192,6 +193,7 @@ impl StreamMuxer for Connection {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<Self::Substream, Self::Error>> {
+        info!("poll_outbound");
         if let Poll::Ready(Some(substream)) = self.outbound_open_rx.poll_recv(cx) {
             return Poll::Ready(Ok(substream));
         }
@@ -201,6 +203,7 @@ impl StreamMuxer for Connection {
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        info!("poll_close");
         if let Poll::Ready(Some(_)) = self.close_rx.poll_recv(cx) {
             return Poll::Ready(Ok(()));
         }
@@ -212,6 +215,7 @@ impl StreamMuxer for Connection {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<StreamMuxerEvent, Self::Error>> {
+        info!("poll");
         while let Poll::Ready(Some(msg)) = self.inbound_rx.poll_recv(cx) {
             match msg.message_type {
                 SubstreamMessageType::OpenRequest => {
@@ -251,10 +255,8 @@ impl StreamMuxer for Connection {
                             .map_err(|e| Error::OutboundSendError(e.to_string()))?;
 
                         // send result to future returned in new_stream
-                        pending_substream_tx
-                            .send(Ok(()))
-                            .map_err(|_| Error::SubstreamSendError)?;
-
+                        // NOTE: this ignores the error if the future has already been dropped
+                        pending_substream_tx.send(Ok(())).ok();
                         debug!("new outbound substream: {:?}", &msg.substream_id);
                     } else {
                         debug!("no substream pending for ID: {:?}", &msg.substream_id);

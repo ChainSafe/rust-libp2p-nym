@@ -32,6 +32,8 @@ pub struct Substream {
     /// used to signal when the substream is closed
     close_rx: Receiver<()>,
     closed: Mutex<bool>,
+
+    unread_data: Mutex<Vec<u8>>,
 }
 
 impl Substream {
@@ -51,6 +53,7 @@ impl Substream {
             outbound_tx,
             close_rx,
             closed: Mutex::new(false),
+            unread_data: Mutex::new(vec![]),
         }
     }
 
@@ -81,14 +84,59 @@ impl AsyncRead for Substream {
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<Result<usize, IoError>> {
-        if let Poll::Ready(Some(data)) = self.inbound_rx.poll_recv(cx) {
-            let len = data.len();
-            buf[..len].copy_from_slice(&data);
-            return Poll::Ready(Ok(len));
+        let inbound_rx_data = self.inbound_rx.poll_recv(cx);
+        let closed_rx_data = self.close_rx.try_recv();
+
+        // first, write any previously unread data to the buf
+        let mut unread_data = self.unread_data.lock().unwrap();
+        let filled_len = if unread_data.len() > 0 {
+            let unread_len = unread_data.len();
+            let buf_len = buf.len();
+            let copy_len = std::cmp::min(unread_len, buf_len);
+            buf[..copy_len].copy_from_slice(&unread_data[..copy_len]);
+            *unread_data = unread_data[copy_len..].to_vec();
+            copy_len
+        } else {
+            0
+        };
+
+        if let Poll::Ready(Some(data)) = inbound_rx_data {
+            if filled_len == buf.len() {
+                // we've filled the buffer, so we'll have to save the rest for later
+                let mut new = vec![];
+                new.extend(unread_data.drain(..));
+                new.extend(data.iter());
+                *unread_data = new;
+                return Poll::Ready(Ok(filled_len));
+            }
+
+            // otherwise, there's still room in the buffer, so we'll copy the rest of the data
+            let remaining_len = buf.len() - filled_len;
+            let data_len = data.len();
+
+            // we have more data than buffer room remaining, save the extra for later
+            if remaining_len < data_len {
+                unread_data.extend_from_slice(&data[remaining_len..]);
+            }
+
+            let copied = std::cmp::min(remaining_len, data_len);
+            buf[filled_len..filled_len + copied].copy_from_slice(&data[..copied]);
+            return Poll::Ready(Ok(copied));
         }
 
-        if let Err(e) = self.check_closed(cx) {
-            return Poll::Ready(Err(e));
+        if filled_len > 0 {
+            return Poll::Ready(Ok(filled_len));
+        }
+
+        if let Err(e) = closed_rx_data {
+            match e {
+                // if the channel is closed, we're done
+                tokio::sync::oneshot::error::TryRecvError::Closed => {
+                    return Poll::Ready(Ok(0));
+                }
+                // if the channel is empty, we're not done yet
+                tokio::sync::oneshot::error::TryRecvError::Empty => {}
+            }
         }
 
         Poll::Pending
@@ -116,7 +164,12 @@ impl AsyncWrite for Substream {
                     ),
                 }),
             })
-            .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| {
+                IoError::new(
+                    ErrorKind::Other,
+                    format!("poll_write outbound_tx error: {}", e),
+                )
+            })?;
 
         Poll::Ready(Ok(buf.len()))
     }
@@ -146,7 +199,12 @@ impl AsyncWrite for Substream {
                     message: SubstreamMessage::new_close(self.substream_id.clone()),
                 }),
             })
-            .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| {
+                IoError::new(
+                    ErrorKind::Other,
+                    format!("poll_close outbound_rx error: {}", e),
+                )
+            })?;
 
         Poll::Ready(Ok(()))
     }

@@ -222,6 +222,7 @@ impl NymTransport {
                 debug!("got connection request {:?}", inner);
                 match self.handle_connection_request(&inner) {
                     Ok(conn) => {
+                        //conn.new_stream()?;
                         let (connection_tx, connection_rx) =
                             oneshot::channel::<(PeerId, Connection)>();
                         let upgrade = Upgrade::new(connection_rx);
@@ -251,7 +252,6 @@ impl NymTransport {
 /// Note: we immediately upgrade a connection request to a connection,
 /// so this only contains a channel for receiving that connection.
 pub struct Upgrade {
-    //remote_peer_id: PeerId,
     connection_tx: oneshot::Receiver<(PeerId, Connection)>,
 }
 
@@ -336,8 +336,11 @@ impl Transport for NymTransport {
             };
 
             // TODO: response timeout
-            let conn = connection_rx.await.map_err(Error::OneshotRecvError)?;
+            let mut conn = connection_rx.await.map_err(Error::OneshotRecvError)?;
             debug!("received connection response");
+
+            // NOTE: we drop the future here; libp2p handles the new stream in poll_outbound
+            conn.new_stream()?;
             Ok((conn.peer_id, conn))
         }
         .boxed())
