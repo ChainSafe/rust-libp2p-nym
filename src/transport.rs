@@ -219,7 +219,7 @@ impl NymTransport {
     fn handle_inbound(&mut self, msg: Message) -> Result<InboundTransportEvent, Error> {
         match msg {
             Message::ConnectionRequest(inner) => {
-                debug!("got connection request {:?}", inner);
+                debug!("got inbound connection request {:?}", inner);
                 match self.handle_connection_request(&inner) {
                     Ok(conn) => {
                         let (connection_tx, connection_rx) =
@@ -234,12 +234,12 @@ impl NymTransport {
                 }
             }
             Message::ConnectionResponse(msg) => {
-                debug!("got connection response {:?}", msg);
+                debug!("got inbound connection response {:?}", msg);
                 self.handle_connection_response(&msg)
                     .map(|_| InboundTransportEvent::ConnectionResponse)
             }
             Message::TransportMessage(msg) => {
-                debug!("got TransportMessage: {:?}", msg);
+                debug!("got inbound TransportMessage: {:?}", msg);
                 self.handle_transport_message(&msg)
                     .map(|_| InboundTransportEvent::TransportMessage)
             }

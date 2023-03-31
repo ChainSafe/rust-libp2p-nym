@@ -172,10 +172,10 @@ impl Connection {
                 substream_id
             );
             // send data to substream
-            // this error should NOT happen!!
             let Some(inbound_tx) = self
                     .substream_inbound_txs
                     .get_mut(substream_id) else {
+                    // this error should NOT happen!!
                     return Err(Error::InboundSendError(format!("SubstreamMessageType::OpenResponse no substream channel for ID: {:?}", substream_id)));
             };
             inbound_tx.send(data).map_err(|e| {
@@ -291,7 +291,7 @@ impl StreamMuxer for Connection {
                         if let Some(mut existing_data) =
                             self.pending_substream_data.remove(&msg.substream_id)
                         {
-                            existing_data.extend(data);
+                            existing_data.extend(data.iter());
                             self.pending_substream_data
                                 .insert(msg.substream_id.clone(), existing_data);
                         } else {
@@ -305,12 +305,10 @@ impl StreamMuxer for Connection {
                         .substream_inbound_txs
                         .get_mut(&msg.substream_id)
                         .expect("must have a substream channel for non-pending substream");
-                    inbound_tx.send(data).map_err(|e| {
-                        Error::InboundSendError(format!(
-                            "failed to send inbound data to substream: {}",
-                            e
-                        ))
-                    })?;
+
+                    // NOTE: this ignores channel closed errors, which is fine because the substream
+                    // might have been closed/dropped
+                    inbound_tx.send(data).ok();
                 }
             }
         }

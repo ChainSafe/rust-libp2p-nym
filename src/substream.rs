@@ -12,6 +12,7 @@ use tokio::sync::{
     mpsc::{UnboundedReceiver, UnboundedSender},
     oneshot::Receiver,
 };
+use tracing::debug;
 
 use crate::message::{
     ConnectionId, Message, OutboundMessage, SubstreamId, SubstreamMessage, TransportMessage,
@@ -127,10 +128,12 @@ impl AsyncRead for Substream {
 
             let copied = std::cmp::min(remaining_len, data_len);
             buf[filled_len..filled_len + copied].copy_from_slice(&data[..copied]);
+            debug!("poll_read copied {} bytes: data {:?}", copied, buf);
             return Poll::Ready(Ok(copied));
         }
 
         if filled_len > 0 {
+            debug!("poll_read copied {} bytes: data {:?}", filled_len, buf);
             return Poll::Ready(Ok(filled_len));
         }
 
@@ -208,12 +211,87 @@ impl AsyncWrite for Substream {
 #[cfg(test)]
 mod test {
     use futures::{AsyncReadExt, AsyncWriteExt};
+    use nym_sphinx::addressing::clients::Recipient;
     use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
 
     use super::Substream;
     use crate::message::{ConnectionId, Message, SubstreamId, SubstreamMessage, TransportMessage};
     use crate::mixnet::initialize_mixnet;
     use crate::new_nym_client;
+
+    #[tokio::test]
+    async fn test_substream_poll_read_unread_data() {
+        let (outbound_tx, _) = tokio::sync::mpsc::unbounded_channel();
+
+        const MSG_INNER: &[u8] = "hello".as_bytes();
+        let connection_id = ConnectionId::generate();
+        let substream_id = SubstreamId::generate();
+
+        let (inbound_tx, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (_, close_rx) = tokio::sync::oneshot::channel();
+
+        let mut substream = Substream::new(
+            Recipient::try_from_base58_string("D1rrpsysCGCYXy9saP8y3kmNpGtJZUXN9SvFoUcqAsM9.9Ssso1ea5NfkbMASdiseDSjTN1fSWda5SgEVjdSN4CvV@GJqd3ZxpXWSNxTfx7B1pPtswpetH4LnJdFeLeuY5KUuN").unwrap(),
+            connection_id,
+            substream_id,
+            inbound_rx,
+            outbound_tx,
+            close_rx,
+        );
+
+        // test writing and reading w/ same length data
+        let data = b"hello".to_vec();
+        inbound_tx.send(data.clone()).unwrap();
+        let mut buf = [0u8; 5];
+        let read_len = substream.read(&mut buf).await.unwrap();
+        assert_eq!(read_len, data.len());
+        assert_eq!(buf.to_vec(), data);
+
+        // test writing data longer than read buffer
+        let data = b"nootwashere".to_vec();
+        inbound_tx.send(data.clone()).unwrap();
+
+        let mut buf = [0u8; 4];
+        let read_len = substream.read(&mut buf).await.unwrap();
+        assert_eq!(read_len, buf.len());
+        assert_eq!(buf.to_vec(), b"noot".to_vec());
+
+        let mut buf = [0u8; 7];
+        let read_len = substream.read(&mut buf).await.unwrap();
+        assert_eq!(read_len, buf.len());
+        assert_eq!(buf.to_vec(), b"washere".to_vec());
+
+        // test read buffer larger than written data
+        let data = b"nootwashere".to_vec();
+        inbound_tx.send(data.clone()).unwrap();
+        let mut buf = [0u8; 16];
+        let read_len = substream.read(&mut buf).await.unwrap();
+        assert_eq!(read_len, data.len());
+        assert_eq!(buf[..data.len()], data);
+        assert_eq!(buf[data.len()..].to_vec(), vec![0u8; 16 - data.len()]);
+
+        // test writing data longer than read buffer multiple times
+        let data = b"nootwashere".to_vec();
+        inbound_tx.send(data.clone()).unwrap();
+
+        let mut buf = [0u8; 4];
+        let read_len = substream.read(&mut buf).await.unwrap();
+        assert_eq!(read_len, buf.len());
+        assert_eq!(buf.to_vec(), b"noot".to_vec());
+
+        let data = b"asdf".to_vec();
+        inbound_tx.send(data.clone()).unwrap();
+
+        let mut buf = [0u8; 4];
+        let read_len = substream.read(&mut buf).await.unwrap();
+        assert_eq!(read_len, buf.len());
+        assert_eq!(buf.to_vec(), b"wash".to_vec());
+
+        let mut buf = [0u8; 8];
+        let read_len = substream.read(&mut buf).await.unwrap();
+        assert_eq!(read_len, 7);
+        assert_eq!(buf[..7], b"ereasdf".to_vec());
+    }
 
     #[tokio::test]
     async fn test_substream_read_write() {

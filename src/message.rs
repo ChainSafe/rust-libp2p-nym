@@ -1,6 +1,7 @@
 use libp2p::core::PeerId;
 use nym_sphinx::addressing::clients::Recipient;
 use rand_core::{OsRng, RngCore};
+use std::fmt::{Debug, Formatter};
 
 use crate::error::Error;
 
@@ -10,7 +11,7 @@ const SUBSTREAM_ID_LENGTH: usize = 32;
 
 /// ConnectionId is a unique, randomly-generated per-connection ID that's used to
 /// identify which connection a message belongs to.
-#[derive(Clone, Default, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Default, Eq, Hash, PartialEq)]
 pub(crate) struct ConnectionId([u8; 32]);
 
 impl ConnectionId {
@@ -27,9 +28,15 @@ impl ConnectionId {
     }
 }
 
+impl Debug for ConnectionId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
+    }
+}
+
 /// SubstreamId is a unique, randomly-generated per-substream ID that's used to
 /// identify which substream a message belongs to.
-#[derive(Clone, Default, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Default, Eq, Hash, PartialEq)]
 pub struct SubstreamId(pub(crate) [u8; 32]);
 
 impl SubstreamId {
@@ -43,6 +50,12 @@ impl SubstreamId {
         let mut id = [0u8; 32];
         id[..].copy_from_slice(&bytes[0..SUBSTREAM_ID_LENGTH]);
         SubstreamId(id)
+    }
+}
+
+impl Debug for SubstreamId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
     }
 }
 
