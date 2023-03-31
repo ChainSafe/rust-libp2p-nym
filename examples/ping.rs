@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let nym_id = rand::random::<u64>().to_string();
     #[allow(unused)]
-    let dialer_uri: String;
+    let dialer_uri: String = Default::default();
     new_nym_client!(nym_id, dialer_uri);
 
     let local_key = identity::Keypair::generate_ed25519();
