@@ -678,10 +678,10 @@ mod test {
         info!("connections established");
 
         // initiate a new substream from the dialer
-        let substream_id = SubstreamId::generate();
-        let dialer_stream_fut = dialer_conn
-            .new_outbound_stream_with_id(substream_id.clone())
-            .unwrap();
+        let mut dialer_substream =
+            poll_fn(|cx| Pin::new(&mut dialer_conn).as_mut().poll_outbound(cx))
+                .await
+                .unwrap();
         listener_notify_inbound_rx.recv().await.unwrap();
 
         // accept the substream on the listener
@@ -708,11 +708,6 @@ mod test {
                 .is_none()
         );
         poll_fn(|cx| Pin::new(&mut dialer_conn).as_mut().poll(cx)).now_or_never();
-        let mut dialer_substream =
-            poll_fn(|cx| Pin::new(&mut dialer_conn).as_mut().poll_outbound(cx))
-                .await
-                .unwrap();
-        dialer_stream_fut.await.unwrap();
         info!("got dialer substream");
 
         // write message from dialer to listener

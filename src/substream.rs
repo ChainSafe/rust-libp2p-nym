@@ -23,7 +23,7 @@ use crate::message::{
 pub struct Substream {
     remote_recipient: Recipient,
     connection_id: ConnectionId,
-    substream_id: SubstreamId,
+    pub(crate) substream_id: SubstreamId,
 
     /// inbound messages; inbound_tx is in the corresponding Connection
     pub(crate) inbound_rx: UnboundedReceiver<Vec<u8>>,
