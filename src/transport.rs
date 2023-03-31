@@ -221,9 +221,7 @@ impl NymTransport {
             Message::ConnectionRequest(inner) => {
                 debug!("got connection request {:?}", inner);
                 match self.handle_connection_request(&inner) {
-                    Ok(mut conn) => {
-                        // NOTE: we ignore the future here, since libp2p will handle the stream in poll_outbound
-                        conn.new_stream().ok();
+                    Ok(conn) => {
                         let (connection_tx, connection_rx) =
                             oneshot::channel::<(PeerId, Connection)>();
                         let upgrade = Upgrade::new(connection_rx);
@@ -337,11 +335,8 @@ impl Transport for NymTransport {
             };
 
             // TODO: response timeout
-            let mut conn = connection_rx.await.map_err(Error::OneshotRecvError)?;
-            debug!("received connection response");
-
-            // NOTE: we drop the future here; libp2p handles the new stream in poll_outbound
-            conn.new_stream()?;
+            let conn = connection_rx.await.map_err(Error::OneshotRecvError)?;
+            debug!("received connection response: id {:?}", conn.id);
             Ok((conn.peer_id, conn))
         }
         .boxed())
@@ -685,7 +680,7 @@ mod test {
         // initiate a new substream from the dialer
         let substream_id = SubstreamId::generate();
         let dialer_stream_fut = dialer_conn
-            .new_stream_with_id(substream_id.clone())
+            .new_outbound_stream_with_id(substream_id.clone())
             .unwrap();
         listener_notify_inbound_rx.recv().await.unwrap();
 

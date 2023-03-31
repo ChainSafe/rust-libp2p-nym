@@ -1,4 +1,3 @@
-use futures::prelude::*;
 use libp2p::core::{muxing::StreamMuxerEvent, PeerId, StreamMuxer};
 use nym_sphinx::addressing::clients::Recipient;
 use std::{
@@ -49,17 +48,11 @@ pub struct Connection {
     inbound_open_tx: UnboundedSender<Substream>,
     inbound_open_rx: UnboundedReceiver<Substream>,
 
-    /// outbound substream open requests; used in poll_outbound
-    outbound_open_tx: UnboundedSender<Substream>,
-    outbound_open_rx: UnboundedReceiver<Substream>,
-
     /// closed substream IDs; used in poll_close
     close_tx: UnboundedSender<SubstreamId>,
     close_rx: UnboundedReceiver<SubstreamId>,
 
-    // TODO: do we need more wakers?
     waker: Option<Waker>,
-    outbound_waker: Option<Waker>,
 }
 
 impl Connection {
@@ -71,7 +64,6 @@ impl Connection {
         mixnet_outbound_tx: UnboundedSender<OutboundMessage>,
     ) -> Self {
         let (inbound_open_tx, inbound_open_rx) = unbounded_channel();
-        let (outbound_open_tx, outbound_open_rx) = unbounded_channel();
         let (close_tx, close_rx) = unbounded_channel();
 
         Connection {
@@ -85,29 +77,15 @@ impl Connection {
             mixnet_outbound_tx,
             inbound_open_tx,
             inbound_open_rx,
-            outbound_open_tx,
-            outbound_open_rx,
             close_tx,
             close_rx,
             waker: None,
-            outbound_waker: None,
         }
     }
 
-    /// attempts to open a new stream over the connection; returns a future that resolves when the stream is established.
-    #[allow(clippy::type_complexity)]
-    pub fn new_stream(
-        &mut self,
-    ) -> Result<Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>, Error> {
+    fn new_outbound_substream(&mut self) -> Result<Substream, Error> {
         let substream_id = SubstreamId::generate();
-        self.new_stream_with_id(substream_id)
-    }
 
-    #[allow(clippy::type_complexity)]
-    pub fn new_stream_with_id(
-        &mut self,
-        substream_id: SubstreamId,
-    ) -> Result<Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>, Error> {
         // send the substream open request that requests to open a substream with the given ID
         self.mixnet_outbound_tx
             .send(OutboundMessage {
@@ -122,21 +100,23 @@ impl Connection {
             })
             .map_err(|e| Error::OutboundSendError(e.to_string()))?;
 
+        // notify the substream when a response has been received
         let (tx, rx) = oneshot::channel::<Result<(), Error>>();
-        self.pending_substreams_tx.insert(substream_id, tx);
+        self.pending_substreams_tx.insert(substream_id.clone(), tx);
 
         if let Some(waker) = self.waker.take() {
             waker.wake();
         }
 
-        // TODO: response timeout
-        Ok(Box::pin(async move {
-            rx.await.map_err(Error::OneshotRecvError)?
-        }))
+        self.new_substream(substream_id, Some(rx))
     }
 
-    /// creates a new substream instance with the given ID.
-    fn new_substream(&mut self, id: SubstreamId) -> Result<Substream, Error> {
+    // creates a new substream instance with the given ID.
+    fn new_substream(
+        &mut self,
+        id: SubstreamId,
+        stream_opened_rx: Option<oneshot::Receiver<Result<(), Error>>>,
+    ) -> Result<Substream, Error> {
         // check we don't already have a substream with this ID
         if self.substream_inbound_txs.get(&id).is_some() {
             return Err(Error::SubstreamIdExists(id));
@@ -154,6 +134,7 @@ impl Connection {
             inbound_rx,
             self.mixnet_outbound_tx.clone(),
             close_rx,
+            stream_opened_rx,
         ))
     }
 
@@ -191,15 +172,10 @@ impl StreamMuxer for Connection {
 
     fn poll_outbound(
         mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
+        _cx: &mut Context<'_>,
     ) -> Poll<Result<Self::Substream, Self::Error>> {
         info!("poll_outbound");
-        if let Poll::Ready(Some(substream)) = self.outbound_open_rx.poll_recv(cx) {
-            return Poll::Ready(Ok(substream));
-        }
-
-        self.outbound_waker = Some(cx.waker().clone());
-        Poll::Pending
+        Poll::Ready(self.new_outbound_substream())
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -220,7 +196,7 @@ impl StreamMuxer for Connection {
             match msg.message_type {
                 SubstreamMessageType::OpenRequest => {
                     // create a new substream with the given ID
-                    let substream = self.new_substream(msg.substream_id.clone())?;
+                    let substream = self.new_substream(msg.substream_id.clone(), None)?;
 
                     // send the response to the remote peer
                     self.mixnet_outbound_tx
@@ -247,12 +223,12 @@ impl StreamMuxer for Connection {
                     if let Some(pending_substream_tx) =
                         self.pending_substreams_tx.remove(&msg.substream_id)
                     {
-                        let substream = self.new_substream(msg.substream_id.clone())?;
+                        // let substream = self.new_substream(msg.substream_id.clone())?;
 
                         // send the substream to our own channel to be returned in poll_outbound
-                        self.outbound_open_tx
-                            .send(substream)
-                            .map_err(|e| Error::OutboundSendError(e.to_string()))?;
+                        // self.outbound_open_tx
+                        //     .send(substream)
+                        //     .map_err(|e| Error::OutboundSendError(e.to_string()))?;
 
                         // send result to future returned in new_stream
                         // NOTE: this ignores the error if the future has already been dropped
@@ -262,9 +238,9 @@ impl StreamMuxer for Connection {
                         debug!("no substream pending for ID: {:?}", &msg.substream_id);
                     }
 
-                    if let Some(waker) = self.outbound_waker.take() {
-                        waker.wake();
-                    }
+                    // if let Some(waker) = self.outbound_waker.take() {
+                    //     waker.wake();
+                    // }
                 }
                 SubstreamMessageType::Close => {
                     self.handle_close(msg.substream_id)?;
@@ -308,6 +284,7 @@ impl PendingConnection {
 #[cfg(test)]
 mod test {
     use futures::future::poll_fn;
+    use futures::prelude::*;
     use futures::{AsyncReadExt, AsyncWriteExt, FutureExt};
     use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
 
@@ -328,6 +305,50 @@ mod test {
                 inbound_tx.send(msg).unwrap();
             }
             _ => panic!("unexpected message"),
+        }
+    }
+
+    impl Connection {
+        /// attempts to open a new stream over the connection; returns a future that resolves when the stream is established.
+        // #[allow(clippy::type_complexity)]
+        // fn new_outbound_stream(
+        //     &mut self,
+        // ) -> Result<Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>, Error> {
+        //     let substream_id = SubstreamId::generate();
+        //     self.new_outbound_stream_with_id(substream_id)
+        // }
+
+        /// attempts to open a new stream over the connection; returns a future that resolves when the stream is established.
+        #[allow(clippy::type_complexity)]
+        pub(crate) fn new_outbound_stream_with_id(
+            &mut self,
+            substream_id: SubstreamId,
+        ) -> Result<Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>, Error> {
+            // send the substream open request that requests to open a substream with the given ID
+            self.mixnet_outbound_tx
+                .send(OutboundMessage {
+                    recipient: self.remote_recipient,
+                    message: Message::TransportMessage(TransportMessage {
+                        id: self.id.clone(),
+                        message: SubstreamMessage {
+                            substream_id: substream_id.clone(),
+                            message_type: SubstreamMessageType::OpenRequest,
+                        },
+                    }),
+                })
+                .map_err(|e| Error::OutboundSendError(e.to_string()))?;
+
+            let (tx, rx) = oneshot::channel::<Result<(), Error>>();
+            self.pending_substreams_tx.insert(substream_id, tx);
+
+            if let Some(waker) = self.waker.take() {
+                waker.wake();
+            }
+
+            // TODO: response timeout
+            Ok(Box::pin(async move {
+                rx.await.map_err(Error::OneshotRecvError)?
+            }))
         }
     }
 
@@ -373,7 +394,7 @@ mod test {
         // send the substream OpenRequest to the mixnet
         let substream_id = SubstreamId::generate();
         let sender_stream_fut = sender_connection
-            .new_stream_with_id(substream_id.clone())
+            .new_outbound_stream_with_id(substream_id.clone())
             .unwrap();
         assert!(sender_connection
             .pending_substreams_tx
