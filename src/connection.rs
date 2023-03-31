@@ -267,7 +267,6 @@ mod test {
     use futures::future::poll_fn;
     use futures::{AsyncReadExt, AsyncWriteExt, FutureExt};
     use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
-    use tracing_subscriber::EnvFilter;
 
     use super::*;
     use crate::message::InboundMessage;
@@ -291,12 +290,6 @@ mod test {
 
     #[tokio::test]
     async fn test_connection_stream_muxer() {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
-            )
-            .init();
-
         let nym_id = "test_connection_stream_muxer_sender";
         #[allow(unused)]
         let sender_uri: String;

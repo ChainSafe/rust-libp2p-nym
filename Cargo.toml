@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 futures = "0.3.26"
 libp2p = { git = "https://github.com/ChainSafe/rust-libp2p.git", rev = "e3440d25681df380c9f0f8cfdcfd5ecc0a4f2fb6", features = [ "identify", "macros", "ping", "tokio" ] }
-#libp2p = { path = "../rust-libp2p", features = [ "identify", "macros", "ping", "tokio" ] }
 multihash = "0.17"
 nym-websocket = { package = "websocket-requests", git = "https://github.com/nymtech/nym" }
 nym-sphinx = { package = "nym-sphinx", git = "https://github.com/nymtech/nym" }

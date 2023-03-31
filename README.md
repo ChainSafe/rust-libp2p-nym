@@ -33,7 +33,13 @@ cargo run --example ping -- /nym/FhtkzizQg2JbZ19kGkRKXdjV2QnFbT5ww88ZAKaD4nkF.7R
 # Listening on "/nym/2oiRW5C9ivyF3Bo3Gpm4H9EqSKH7A6GpcrRRwVSDVUQ9.EajgCnhzimsP6KskUwKcEj8VFCmHR78s2J6FHWcZ4etR@Fo4f4SQLdoyoGkFae5TpVhRVoXCF8UiypLVGtGjujVPf"
 ```
 
-You should see that the nodes dialed each other.
+You should see that the nodes connected and pinged each other:
+```bash
+# BehaviourEvent: Event { peer: PeerId("12D3KooWG4QnLbms8v9xHqKJGycjtzGU8RocKXMiREpgFJ7mxSzD"), result: Ok(Ping { rtt: 880.249128ms }) }
+```
+```bash
+# BehaviourEvent: Event { peer: PeerId("12D3KooWPymxhnqbH2dALhC2Yd2rSCkVZYYPdMxv55cn7U7x9a8c"), result: Ok(Pong) }
+```
 
 ### Writing New Tests
 

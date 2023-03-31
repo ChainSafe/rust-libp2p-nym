@@ -98,6 +98,11 @@ impl AsyncRead for Substream {
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<Result<usize, IoError>> {
+        let closed_result = self.as_mut().check_closed(cx);
+        if let Err(e) = closed_result {
+            return Poll::Ready(Err(e));
+        }
+
         let inbound_rx_data = self.inbound_rx.poll_recv(cx);
         let closed_rx_data = self.close_rx.try_recv();
 

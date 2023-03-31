@@ -692,7 +692,7 @@ mod test {
         );
         poll_fn(|cx| Pin::new(&mut listener_conn).as_mut().poll(cx)).now_or_never();
 
-        // poll recipient's poll_inbound to receive the substream
+        // poll recipient's poll_inbound to receive the substream; sends a response to the sender
         let mut listener_substream =
             poll_fn(|cx| Pin::new(&mut listener_conn).as_mut().poll_inbound(cx))
                 .now_or_never()
@@ -701,7 +701,7 @@ mod test {
         info!("got listener substream");
         dialer_notify_inbound_rx.recv().await.unwrap();
 
-        // poll sender's poll_outbound to get the substream
+        // poll sender to finalize the substream
         assert!(
             poll_fn(|cx| Pin::new(&mut dialer_transport).as_mut().poll(cx))
                 .now_or_never()
@@ -740,6 +740,7 @@ mod test {
 
         // assert we can't read or write to either substream
         dialer_substream.write_all(b"hello").await.unwrap_err();
+        // poll listener transport and conn to receive the substream close message
         poll_fn(|cx| Pin::new(&mut listener_transport).as_mut().poll(cx)).now_or_never();
         poll_fn(|cx| Pin::new(&mut listener_conn).as_mut().poll(cx)).now_or_never();
         listener_substream.write_all(b"hello").await.unwrap_err();
