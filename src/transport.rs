@@ -528,12 +528,12 @@ mod test {
         // should be able to resolve the connections now
         let (_, mut listener_conn) = poll_fn(|cx| Pin::new(&mut upgrade).as_mut().poll_unpin(cx))
             .now_or_never()
-            .unwrap()
-            .unwrap();
+            .expect("the upgrade should be ready")
+            .expect("the upgrade should not error");
         let (_, mut dialer_conn) = poll_fn(|cx| Pin::new(&mut dial).as_mut().poll_unpin(cx))
             .now_or_never()
-            .unwrap()
-            .unwrap();
+            .expect("the upgrade should be ready")
+            .expect("the upgrade should not error");
         info!("connections established");
 
         // write messages from the dialer to the listener and vice versa

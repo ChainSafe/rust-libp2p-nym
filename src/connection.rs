@@ -1,7 +1,7 @@
 use libp2p::core::{muxing::StreamMuxerEvent, PeerId, StreamMuxer};
 use nym_sphinx::addressing::clients::Recipient;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     pin::Pin,
     task::{Context, Poll, Waker},
 };
@@ -31,7 +31,7 @@ pub struct Connection {
 
     /// substream ID -> outbound pending substream exists
     /// the key is deleted when the response is received, or the request times out (TODO)
-    pending_substreams: HashMap<SubstreamId, ()>,
+    pending_substreams: HashSet<SubstreamId>,
 
     /// substream ID -> any pending substream data that's to be written
     /// to the stream once the substream request/response is received
@@ -75,7 +75,7 @@ impl Connection {
             remote_recipient,
             id,
             inbound_rx,
-            pending_substreams: HashMap::new(),
+            pending_substreams: HashSet::new(),
             pending_substream_data: HashMap::new(),
             substream_inbound_txs: HashMap::new(),
             substream_close_txs: HashMap::new(),
@@ -109,7 +109,7 @@ impl Connection {
         // TODO we should probably lock this? storing map values should be atomic
         let res = self.new_substream(substream_id.clone());
         if res.is_ok() {
-            self.pending_substreams.insert(substream_id, ());
+            self.pending_substreams.insert(substream_id);
         }
         res
     }
@@ -256,7 +256,7 @@ impl StreamMuxer for Connection {
                     debug!("new inbound substream: {:?}", &msg.substream_id);
                 }
                 SubstreamMessageType::OpenResponse => {
-                    if self.pending_substreams.remove(&msg.substream_id).is_some() {
+                    if self.pending_substreams.remove(&msg.substream_id) {
                         // check if we have any pending inbound data for this substream and send it if so
                         self.send_pending_inbound_data_to_substream(&msg.substream_id)?;
                         debug!("new outbound substream: {:?}", &msg.substream_id);
@@ -281,7 +281,7 @@ impl StreamMuxer for Connection {
 
                     // check if this an outbound stream that's still pending response
                     let is_pending_outbound =
-                        self.pending_substreams.contains_key(&msg.substream_id);
+                        self.pending_substreams.contains(&msg.substream_id);
 
                     if is_pending_inbound || is_pending_outbound {
                         debug!(
@@ -408,7 +408,7 @@ mod test {
         let mut sender_substream = sender_connection.new_outbound_substream().unwrap();
         assert!(sender_connection
             .pending_substreams
-            .contains_key(&sender_substream.substream_id));
+            .contains(&sender_substream.substream_id));
 
         // poll the recipient inbound stream; should receive the OpenRequest and create the substream
         inbound_receive_and_send(

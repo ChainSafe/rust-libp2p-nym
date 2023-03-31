@@ -9,6 +9,7 @@ libp2p = { git = "https://github.com/ChainSafe/rust-libp2p.git", rev = "e3440d25
 multihash = "0.17"
 nym-websocket = { package = "websocket-requests", git = "https://github.com/nymtech/nym" }
 nym-sphinx = { package = "nym-sphinx", git = "https://github.com/nymtech/nym" }
+parking_lot = "0.12"
 rand = { version = "0.8", features = [ "std" ] }
 rand_core = "0.6"
 thiserror = "1.0"

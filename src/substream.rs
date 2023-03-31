@@ -3,9 +3,9 @@ use futures::{
     AsyncRead, AsyncWrite,
 };
 use nym_sphinx::addressing::clients::Recipient;
+use parking_lot::Mutex;
 use std::{
     pin::Pin,
-    sync::Mutex,
     task::{Context, Poll},
 };
 use tokio::sync::{
@@ -66,7 +66,7 @@ impl Substream {
         // or if it's empty
         let received_closed = self.close_rx.try_recv();
 
-        let mut closed = self.closed.lock().unwrap();
+        let mut closed = self.closed.lock();
         if *closed {
             return Err(closed_err);
         }
@@ -94,7 +94,7 @@ impl AsyncRead for Substream {
         let inbound_rx_data = self.inbound_rx.poll_recv(cx);
 
         // first, write any previously unread data to the buf
-        let mut unread_data = self.unread_data.lock().unwrap();
+        let mut unread_data = self.unread_data.lock();
         let filled_len = if unread_data.len() > 0 {
             let unread_len = unread_data.len();
             let buf_len = buf.len();
@@ -178,7 +178,7 @@ impl AsyncWrite for Substream {
     }
 
     fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), IoError>> {
-        let mut closed = self.closed.lock().unwrap();
+        let mut closed = self.closed.lock();
         if *closed {
             return Poll::Ready(Err(IoError::new(ErrorKind::Other, "stream closed")));
         }

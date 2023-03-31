@@ -40,9 +40,9 @@
 //! The two nodes establish a connection, negotiate the ping protocol
 //! and begin pinging each other.
 
-use futures::StreamExt;
+use libp2p::futures::StreamExt;
 use libp2p::core::{muxing::StreamMuxerBox, transport::Transport};
-use libp2p::swarm::{keep_alive, NetworkBehaviour, Swarm, SwarmEvent};
+use libp2p::swarm::{keep_alive, NetworkBehaviour, SwarmEvent, SwarmBuilder};
 use libp2p::{identity, ping, Multiaddr, PeerId};
 use rust_libp2p_nym::{new_nym_client, transport::NymTransport};
 use std::error::Error;
@@ -69,13 +69,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let transport = NymTransport::new(&dialer_uri, local_key).await?;
 
-    let mut swarm = Swarm::with_tokio_executor(
+    let mut swarm = SwarmBuilder::with_tokio_executor(
         transport
             .map(|a, _| (a.0, StreamMuxerBox::new(a.1)))
             .boxed(),
         Behaviour::default(),
         local_peer_id,
-    );
+    ).build();
 
     // Dial the peer identified by the multi-address given as the second
     // command-line argument, if any.
