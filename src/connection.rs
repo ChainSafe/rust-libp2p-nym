@@ -280,8 +280,7 @@ impl StreamMuxer for Connection {
                         !self.substream_inbound_txs.contains_key(&msg.substream_id);
 
                     // check if this an outbound stream that's still pending response
-                    let is_pending_outbound =
-                        self.pending_substreams.contains(&msg.substream_id);
+                    let is_pending_outbound = self.pending_substreams.contains(&msg.substream_id);
 
                     if is_pending_inbound || is_pending_outbound {
                         debug!(
