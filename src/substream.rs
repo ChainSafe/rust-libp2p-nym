@@ -12,9 +12,7 @@ use tokio::sync::{
     mpsc::{UnboundedReceiver, UnboundedSender},
     oneshot::Receiver,
 };
-use tracing::debug;
 
-use crate::error::Error;
 use crate::message::{
     ConnectionId, Message, OutboundMessage, SubstreamId, SubstreamMessage, TransportMessage,
 };
@@ -38,14 +36,6 @@ pub struct Substream {
     // buffer of data that's been written to the stream,
     // but not yet read by the application.
     unread_data: Mutex<Vec<u8>>,
-
-    // if this is an outbound stream, this is Some.
-    // when we receive a response from the remote peer that they've received the stream
-    // a value is sent on this channel.
-    // TODO: we receive an error in the case of timeout.
-    //
-    // if the stream is inbound, this is None.
-    stream_opened_rx: Option<Receiver<Result<(), Error>>>,
 }
 
 impl Substream {
@@ -56,7 +46,6 @@ impl Substream {
         inbound_rx: UnboundedReceiver<Vec<u8>>,
         outbound_tx: UnboundedSender<OutboundMessage>,
         close_rx: Receiver<()>,
-        stream_opened_rx: Option<Receiver<Result<(), Error>>>,
     ) -> Self {
         Substream {
             remote_recipient,
@@ -67,7 +56,6 @@ impl Substream {
             close_rx,
             closed: Mutex::new(false),
             unread_data: Mutex::new(vec![]),
-            stream_opened_rx,
         }
     }
 
@@ -104,7 +92,6 @@ impl AsyncRead for Substream {
         }
 
         let inbound_rx_data = self.inbound_rx.poll_recv(cx);
-        let closed_rx_data = self.close_rx.try_recv();
 
         // first, write any previously unread data to the buf
         let mut unread_data = self.unread_data.lock().unwrap();
@@ -147,17 +134,6 @@ impl AsyncRead for Substream {
             return Poll::Ready(Ok(filled_len));
         }
 
-        if let Err(e) = closed_rx_data {
-            match e {
-                // if the channel is closed, we're done
-                tokio::sync::oneshot::error::TryRecvError::Closed => {
-                    return Poll::Ready(Ok(0));
-                }
-                // if the channel is empty, we're not done yet
-                tokio::sync::oneshot::error::TryRecvError::Empty => {}
-            }
-        }
-
         Poll::Pending
     }
 }
@@ -170,31 +146,6 @@ impl AsyncWrite for Substream {
     ) -> Poll<Result<usize, IoError>> {
         if let Err(e) = self.as_mut().check_closed(cx) {
             return Poll::Ready(Err(e));
-        }
-
-        if let Some(ref mut rx) = self.stream_opened_rx {
-            match rx.try_recv() {
-                Ok(res) => {
-                    debug!(
-                        "poll_write: received stream_opened_rx, id: {:?}",
-                        self.substream_id
-                    );
-                    if let Err(e) = res {
-                        return Poll::Ready(Err(IoError::new(
-                            ErrorKind::Other,
-                            format!("stream_opened_rx error: {}", e),
-                        )));
-                    }
-                }
-                Err(e) => match e {
-                    // we can write to the stream since it's been confirmed as opened by the remote peer
-                    tokio::sync::oneshot::error::TryRecvError::Closed => {}
-                    // if the channel is empty, we're still pending a response
-                    tokio::sync::oneshot::error::TryRecvError::Empty => {
-                        //return Poll::Pending;
-                    }
-                },
-            }
         }
 
         self.outbound_tx
@@ -287,7 +238,6 @@ mod test {
             inbound_rx,
             outbound_tx,
             close_rx,
-            None,
         );
 
         // send message to ourselves over the mixnet
@@ -368,7 +318,6 @@ mod test {
             inbound_rx,
             outbound_tx,
             close_rx,
-            None,
         );
 
         // close substream
