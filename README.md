@@ -35,10 +35,10 @@ cargo run --example ping -- /nym/FhtkzizQg2JbZ19kGkRKXdjV2QnFbT5ww88ZAKaD4nkF.7R
 
 You should see that the nodes connected and pinged each other:
 ```bash
-# BehaviourEvent: Event { peer: PeerId("12D3KooWG4QnLbms8v9xHqKJGycjtzGU8RocKXMiREpgFJ7mxSzD"), result: Ok(Ping { rtt: 880.249128ms }) }
+# Mar 30 22:56:36.400  INFO ping: BehaviourEvent: Event { peer: PeerId("12D3KooWGf2oYd6U2nrLzfDrN9zxsjSQjPsMh2oDJPUQ9hiHMNtf"), result: Ok(Ping { rtt: 1.06836675s }) }
 ```
 ```bash
-# BehaviourEvent: Event { peer: PeerId("12D3KooWPymxhnqbH2dALhC2Yd2rSCkVZYYPdMxv55cn7U7x9a8c"), result: Ok(Pong) }
+# Mar 30 22:56:35.595  INFO ping: BehaviourEvent: Event { peer: PeerId("12D3KooWMd5ak31DXuZq7x1JuFSR6toA5RDQrPaHrfXEhy7vqqpC"), result: Ok(Pong) }
 ```
 
 ### Writing New Tests

@@ -161,18 +161,22 @@ impl Connection {
     ) -> Result<(), Error> {
         if let Some(data) = self.pending_substream_data.remove(substream_id) {
             debug!(
-                "Sending pending inbound data to substream: {:?}",
+                "sending pending inbound data to substream: {:?}",
                 substream_id
             );
             // send data to substream
+            // this error should NOT happen!!
             let Some(inbound_tx) = self
                     .substream_inbound_txs
                     .get_mut(substream_id) else {
                     return Err(Error::InboundSendError(format!("SubstreamMessageType::OpenResponse no substream channel for ID: {:?}", substream_id)));
             };
-            inbound_tx
-                .send(data)
-                .map_err(|e| Error::InboundSendError(e.to_string()))?;
+            inbound_tx.send(data).map_err(|e| {
+                Error::InboundSendError(format!(
+                    "failed to send pending inbound data to substream: {}",
+                    e
+                ))
+            })?;
         }
 
         Ok(())
@@ -295,9 +299,12 @@ impl StreamMuxer for Connection {
                         .substream_inbound_txs
                         .get_mut(&msg.substream_id)
                         .expect("must have a substream channel for non-pending substream");
-                    inbound_tx
-                        .send(data)
-                        .map_err(|e| Error::InboundSendError(e.to_string()))?;
+                    inbound_tx.send(data).map_err(|e| {
+                        Error::InboundSendError(format!(
+                            "failed to send inbound data to substream: {}",
+                            e
+                        ))
+                    })?;
                 }
             }
         }
