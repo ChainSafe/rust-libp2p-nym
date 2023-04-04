@@ -226,15 +226,16 @@ impl StreamMuxer for Connection {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<StreamMuxerEvent, Self::Error>> {
-        let mut instant = Instant::now();
+        let instant = Instant::now();
 
         while let Poll::Ready(Some(msg)) = self.inbound_rx.poll_recv(cx) {
-            // remove pending data and reset timer if we've reached the timeout.
+            // clear out pending data and return error if we've reached the timeout.
             if instant.elapsed() >= self.poll_timeout {
                 self.pending_substreams.remove(&msg.substream_id);
                 self.pending_substream_data.remove(&msg.substream_id);
                 self.substream_inbound_txs.remove(&msg.substream_id);
-                instant = Instant::now();
+
+                return Poll::Ready(Err(Error::ConnectionTimeout(self.poll_timeout)));
             }
 
             match msg.message_type {

@@ -72,6 +72,8 @@ pub enum Error {
     ConnectionSendError,
     #[error("failed to send initial TransportEvent::NewAddress")]
     SendErrorTransportEvent,
-    #[error("failed to establish network connection")]
-    ConnectionTimeout(#[from] tokio::time::error::Elapsed),
+    #[error("dialing address timed out")]
+    DialTimeout(#[from] tokio::time::error::Elapsed),
+    #[error("failed to establish network connection {0:?}")]
+    ConnectionTimeout(std::time::Duration),
 }
