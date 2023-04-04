@@ -233,7 +233,6 @@ impl StreamMuxer for Connection {
             if instant.elapsed() >= self.poll_timeout {
                 self.pending_substreams.remove(&msg.substream_id);
                 self.pending_substream_data.remove(&msg.substream_id);
-                self.substream_inbound_txs.remove(&msg.substream_id);
 
                 return Poll::Ready(Err(Error::ConnectionTimeout(self.poll_timeout)));
             }
