@@ -29,7 +29,7 @@ use crate::message::{
     TransportMessage,
 };
 use crate::mixnet::initialize_mixnet;
-use crate::RESPONSE_TIMEOUT_SECS;
+use crate::DEFAULT_HANDSHAKE_TIMEOUT_SECS;
 
 /// InboundTransportEvent represents an inbound event from the mixnet.
 pub enum InboundTransportEvent {
@@ -68,17 +68,27 @@ pub struct NymTransport {
     poll_tx: UnboundedSender<TransportEvent<Upgrade, Error>>,
 
     waker: Option<Waker>,
+
+    /// Timeout for the [`Upgrade`] future.
+    handshake_timeout: Duration,
 }
 
 impl NymTransport {
+    /// New transport.
     pub async fn new(uri: &String, keypair: Keypair) -> Result<Self, Error> {
-        Self::new_maybe_with_notify_inbound(uri, keypair, None).await
+        Self::new_maybe_with_notify_inbound(uri, keypair, None, None).await
+    }
+
+    /// New transport with a timeout.
+    pub async fn new_with_timeout(uri: &String, keypair: Keypair, timeout: Duration) -> Result<Self, Error> {
+        Self::new_maybe_with_notify_inbound(uri, keypair, None, Some(timeout)).await
     }
 
     async fn new_maybe_with_notify_inbound(
         uri: &String,
         keypair: Keypair,
         notify_inbound_tx: Option<UnboundedSender<()>>,
+        timeout: Option<Duration>,
     ) -> Result<Self, Error> {
         let (self_address, inbound_rx, outbound_tx) =
             initialize_mixnet(uri, notify_inbound_tx).await?;
@@ -95,6 +105,7 @@ impl NymTransport {
             .map_err(|_| Error::SendErrorTransportEvent)?;
 
         let inbound_stream = UnboundedReceiverStream::new(inbound_rx);
+        let handshake_timeout = timeout.unwrap_or_else(|| Duration::from_secs(DEFAULT_HANDSHAKE_TIMEOUT_SECS));
 
         Ok(Self {
             self_address,
@@ -108,6 +119,7 @@ impl NymTransport {
             poll_rx,
             poll_tx,
             waker: None,
+            handshake_timeout,
         })
     }
 
@@ -325,6 +337,7 @@ impl Transport for NymTransport {
         let outbound_tx = self.outbound_tx.clone();
 
         let mut waker = self.waker.clone();
+        let handshake_timeout = self.handshake_timeout.clone();
         Ok(async move {
             outbound_tx
                 .send(OutboundMessage {
@@ -338,7 +351,7 @@ impl Transport for NymTransport {
                 waker.wake();
             };
 
-            let conn = timeout(Duration::from_secs(RESPONSE_TIMEOUT_SECS), connection_rx).await??;
+            let conn = timeout(handshake_timeout, connection_rx).await??;
             Ok((conn.peer_id, conn))
         }
         .boxed())
@@ -456,7 +469,7 @@ mod test {
             notify_inbound_tx: UnboundedSender<()>,
         ) -> Result<Self, Error> {
             let local_key = Keypair::generate_ed25519();
-            Self::new_maybe_with_notify_inbound(uri, local_key, Some(notify_inbound_tx)).await
+            Self::new_maybe_with_notify_inbound(uri, local_key, Some(notify_inbound_tx), None).await
         }
     }
 
