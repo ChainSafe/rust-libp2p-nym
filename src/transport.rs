@@ -402,11 +402,12 @@ mod test {
 
     use super::{nym_address_to_multiaddress, NymTransport};
     use futures::{future::poll_fn, AsyncReadExt, AsyncWriteExt, FutureExt};
+    use libp2p_core::Multiaddr;
     use libp2p_core::{
         transport::{Transport, TransportEvent},
         StreamMuxer,
     };
-    use std::pin::Pin;
+    use std::{pin::Pin, str::FromStr};
     use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
     use tracing::info;
@@ -752,5 +753,38 @@ mod test {
         let n = recipient_substream.read(&mut buf).await.unwrap();
         assert_eq!(n, data.len());
         assert_eq!(buf, data[..]);
+    }
+
+    // FIXME: this test is currently ignored because mocking a new transport
+    // takes too much, and maybe there's any other way to test this?
+    #[ignore]
+    #[tokio::test]
+    async fn test_transport_timeout() {
+        let nym_id = "test_transport_connection_dialer";
+
+        #[allow(unused)]
+        let dialer_uri: String;
+        new_nym_client!(nym_id, dialer_uri);
+        let (dialer_notify_inbound_tx, _) = unbounded_channel();
+        let mut dialer_transport =
+            NymTransport::new_with_notify_inbound(&dialer_uri, dialer_notify_inbound_tx)
+                .await
+                .unwrap();
+
+        // TODO: mock a transport that will never resolve the connection.
+        let empty_addr = Multiaddr::from_str(&format!(
+            "/nym/{}.{}@{}",
+            "a".repeat(44),
+            "b".repeat(44),
+            "c".repeat(44)
+        ))
+        .expect("unable to parse multiaddress");
+
+        assert!(dialer_transport
+            .dial(empty_addr)
+            .err()
+            .expect("should failed")
+            .to_string()
+            .contains("Timeout")); // Elapsed?
     }
 }
