@@ -80,7 +80,11 @@ impl NymTransport {
     }
 
     /// New transport with a timeout.
-    pub async fn new_with_timeout(uri: &String, keypair: Keypair, timeout: Duration) -> Result<Self, Error> {
+    pub async fn new_with_timeout(
+        uri: &String,
+        keypair: Keypair,
+        timeout: Duration,
+    ) -> Result<Self, Error> {
         Self::new_maybe_with_notify_inbound(uri, keypair, None, Some(timeout)).await
     }
 
@@ -105,7 +109,8 @@ impl NymTransport {
             .map_err(|_| Error::SendErrorTransportEvent)?;
 
         let inbound_stream = UnboundedReceiverStream::new(inbound_rx);
-        let handshake_timeout = timeout.unwrap_or_else(|| Duration::from_secs(DEFAULT_HANDSHAKE_TIMEOUT_SECS));
+        let handshake_timeout =
+            timeout.unwrap_or_else(|| Duration::from_secs(DEFAULT_HANDSHAKE_TIMEOUT_SECS));
 
         Ok(Self {
             self_address,
@@ -225,6 +230,7 @@ impl NymTransport {
             id,
             inbound_rx,
             self.outbound_tx.clone(),
+            None,
         );
 
         // inbound_tx is what we write to when receiving messages on the mixnet,
@@ -337,7 +343,7 @@ impl Transport for NymTransport {
         let outbound_tx = self.outbound_tx.clone();
 
         let mut waker = self.waker.clone();
-        let handshake_timeout = self.handshake_timeout.clone();
+        let handshake_timeout = self.handshake_timeout;
         Ok(async move {
             outbound_tx
                 .send(OutboundMessage {

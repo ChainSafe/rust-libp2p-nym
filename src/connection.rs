@@ -4,6 +4,7 @@ use std::{
     collections::{HashMap, HashSet},
     pin::Pin,
     task::{Context, Poll, Waker},
+    time::{Duration, Instant},
 };
 use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
@@ -17,6 +18,7 @@ use crate::message::{
     TransportMessage,
 };
 use crate::substream::Substream;
+use crate::DEFAULT_POLL_TIMEOUT_SECS;
 
 /// Connection represents the result of a connection setup process.
 /// It implements `StreamMuxer` and thus has stream multiplexing built in.
@@ -30,7 +32,7 @@ pub struct Connection {
     pub(crate) inbound_rx: UnboundedReceiver<SubstreamMessage>,
 
     /// substream ID -> outbound pending substream exists
-    /// the key is deleted when the response is received, or the request times out (TODO)
+    /// the key is deleted when the response is received, or the request times out
     pending_substreams: HashSet<SubstreamId>,
 
     /// substream ID -> any pending substream data that's to be written
@@ -57,6 +59,7 @@ pub struct Connection {
     close_rx: UnboundedReceiver<SubstreamId>,
 
     waker: Option<Waker>,
+    poll_timeout: Duration,
 }
 
 impl Connection {
@@ -66,6 +69,7 @@ impl Connection {
         id: ConnectionId,
         inbound_rx: UnboundedReceiver<SubstreamMessage>,
         mixnet_outbound_tx: UnboundedSender<OutboundMessage>,
+        poll_timeout: Option<Duration>,
     ) -> Self {
         let (inbound_open_tx, inbound_open_rx) = unbounded_channel();
         let (close_tx, close_rx) = unbounded_channel();
@@ -85,6 +89,7 @@ impl Connection {
             close_tx,
             close_rx,
             waker: None,
+            poll_timeout: poll_timeout.unwrap_or(Duration::from_secs(DEFAULT_POLL_TIMEOUT_SECS)),
         }
     }
 
@@ -159,9 +164,6 @@ impl Connection {
     /// since Nym packets can be received out-of-order, we might receive data for a stream
     /// before we receive the OpenRequest/Response. in this case, we store the data in
     /// a pending map and send it to the substream once the OpenRequest/Response is received.
-    ///
-    /// TODO: this data should be cleared out if no OpenRequest/Response is received
-    /// after a certain amount of time.
     fn send_pending_inbound_data_to_substream(
         &mut self,
         substream_id: &SubstreamId,
@@ -224,7 +226,17 @@ impl StreamMuxer for Connection {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<StreamMuxerEvent, Self::Error>> {
+        let mut instant = Instant::now();
+
         while let Poll::Ready(Some(msg)) = self.inbound_rx.poll_recv(cx) {
+            // remove pending data and reset timer if we've reached the timeout.
+            if instant.elapsed() >= self.poll_timeout {
+                self.pending_substreams.remove(&msg.substream_id);
+                self.pending_substream_data.remove(&msg.substream_id);
+                self.substream_inbound_txs.remove(&msg.substream_id);
+                instant = Instant::now();
+            }
+
             match msg.message_type {
                 SubstreamMessageType::OpenRequest => {
                     // create a new substream with the given ID
@@ -391,6 +403,7 @@ mod test {
             connection_id.clone(),
             sender_inbound_rx,
             sender_outbound_tx,
+            None,
         );
         let (recipient_inbound_tx, recipient_inbound_rx) = unbounded_channel::<SubstreamMessage>();
         let mut recipient_connection = Connection::new(
@@ -399,6 +412,7 @@ mod test {
             connection_id.clone(),
             recipient_inbound_rx,
             recipient_outbound_tx,
+            None,
         );
 
         // send the substream OpenRequest to the mixnet
