@@ -68,4 +68,6 @@ pub enum Error {
     ConnectionSendError,
     #[error("failed to send initial TransportEvent::NewAddress")]
     SendErrorTransportEvent,
+    #[error("failed to establish network connection")]
+    ConnectionTimeout(#[from] tokio::time::error::Elapsed),
 }

@@ -11,9 +11,12 @@ use std::{
     str::FromStr,
     task::{Context, Poll, Waker},
 };
-use tokio::sync::{
-    mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
-    oneshot,
+use tokio::{
+    sync::{
+        mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+        oneshot,
+    },
+    time::{timeout, Duration},
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::debug;
@@ -25,6 +28,7 @@ use crate::message::{
     TransportMessage,
 };
 use crate::mixnet::initialize_mixnet;
+use crate::RESPONSE_TIMEOUT_SECS;
 
 /// InboundTransportEvent represents an inbound event from the mixnet.
 pub enum InboundTransportEvent {
@@ -313,9 +317,7 @@ impl Transport for NymTransport {
                 waker.wake();
             };
 
-            // TODO: response timeout
-            let conn = connection_rx.await.map_err(Error::OneshotRecvError)?;
-            Ok(conn)
+            Ok(timeout(Duration::from_secs(RESPONSE_TIMEOUT_SECS), connection_rx).await??)
         }
         .boxed())
     }
