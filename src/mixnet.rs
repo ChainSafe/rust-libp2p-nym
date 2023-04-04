@@ -54,12 +54,8 @@ pub(crate) async fn initialize_mixnet(
             pin_mut!(t1, t2);
 
             select! {
-                res = t1 => {
-                    debug!("check_inbound {:?}", res);
-                },
-                res = t2 => {
-                    debug!("check_outbound {:?}", res);
-                },
+                _ = t1 => {},
+                _ = t2 => {},
             };
         }
     });
@@ -73,7 +69,6 @@ async fn check_inbound(
     notify_inbound_tx: &Option<UnboundedSender<()>>,
 ) -> Result<(), Error> {
     if let Some(res) = ws_stream.next().await {
-        debug!("got inbound message from mixnet");
         if let Some(notify_tx) = notify_inbound_tx {
             notify_tx
                 .send(())

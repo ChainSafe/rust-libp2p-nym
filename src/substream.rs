@@ -3,15 +3,16 @@ use futures::{
     AsyncRead, AsyncWrite,
 };
 use nym_sphinx::addressing::clients::Recipient;
+use parking_lot::Mutex;
 use std::{
     pin::Pin,
-    sync::Mutex,
     task::{Context, Poll},
 };
 use tokio::sync::{
     mpsc::{UnboundedReceiver, UnboundedSender},
     oneshot::Receiver,
 };
+use tracing::debug;
 
 use crate::message::{
     ConnectionId, Message, OutboundMessage, SubstreamId, SubstreamMessage, TransportMessage,
@@ -21,7 +22,7 @@ use crate::message::{
 pub struct Substream {
     remote_recipient: Recipient,
     connection_id: ConnectionId,
-    substream_id: SubstreamId,
+    pub(crate) substream_id: SubstreamId,
 
     /// inbound messages; inbound_tx is in the corresponding Connection
     pub(crate) inbound_rx: UnboundedReceiver<Vec<u8>>,
@@ -32,6 +33,10 @@ pub struct Substream {
     /// used to signal when the substream is closed
     close_rx: Receiver<()>,
     closed: Mutex<bool>,
+
+    // buffer of data that's been written to the stream,
+    // but not yet read by the application.
+    unread_data: Mutex<Vec<u8>>,
 }
 
 impl Substream {
@@ -51,6 +56,7 @@ impl Substream {
             outbound_tx,
             close_rx,
             closed: Mutex::new(false),
+            unread_data: Mutex::new(vec![]),
         }
     }
 
@@ -61,7 +67,7 @@ impl Substream {
         // or if it's empty
         let received_closed = self.close_rx.try_recv();
 
-        let mut closed = self.closed.lock().unwrap();
+        let mut closed = self.closed.lock();
         if *closed {
             return Err(closed_err);
         }
@@ -81,14 +87,54 @@ impl AsyncRead for Substream {
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<Result<usize, IoError>> {
-        if let Poll::Ready(Some(data)) = self.inbound_rx.poll_recv(cx) {
-            let len = data.len();
-            buf[..len].copy_from_slice(&data);
-            return Poll::Ready(Ok(len));
+        let closed_result = self.as_mut().check_closed(cx);
+        if let Err(e) = closed_result {
+            return Poll::Ready(Err(e));
         }
 
-        if let Err(e) = self.check_closed(cx) {
-            return Poll::Ready(Err(e));
+        let inbound_rx_data = self.inbound_rx.poll_recv(cx);
+
+        // first, write any previously unread data to the buf
+        let mut unread_data = self.unread_data.lock();
+        let filled_len = if unread_data.len() > 0 {
+            let unread_len = unread_data.len();
+            let buf_len = buf.len();
+            let copy_len = std::cmp::min(unread_len, buf_len);
+            buf[..copy_len].copy_from_slice(&unread_data[..copy_len]);
+            *unread_data = unread_data[copy_len..].to_vec();
+            copy_len
+        } else {
+            0
+        };
+
+        if let Poll::Ready(Some(data)) = inbound_rx_data {
+            if filled_len == buf.len() {
+                // we've filled the buffer, so we'll have to save the rest for later
+                let mut new = vec![];
+                new.extend(unread_data.drain(..));
+                new.extend(data.iter());
+                *unread_data = new;
+                return Poll::Ready(Ok(filled_len));
+            }
+
+            // otherwise, there's still room in the buffer, so we'll copy the rest of the data
+            let remaining_len = buf.len() - filled_len;
+            let data_len = data.len();
+
+            // we have more data than buffer room remaining, save the extra for later
+            if remaining_len < data_len {
+                unread_data.extend_from_slice(&data[remaining_len..]);
+            }
+
+            let copied = std::cmp::min(remaining_len, data_len);
+            buf[filled_len..filled_len + copied].copy_from_slice(&data[..copied]);
+            debug!("poll_read copied {} bytes: data {:?}", copied, buf);
+            return Poll::Ready(Ok(copied));
+        }
+
+        if filled_len > 0 {
+            debug!("poll_read copied {} bytes: data {:?}", filled_len, buf);
+            return Poll::Ready(Ok(filled_len));
         }
 
         Poll::Pending
@@ -116,7 +162,12 @@ impl AsyncWrite for Substream {
                     ),
                 }),
             })
-            .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| {
+                IoError::new(
+                    ErrorKind::Other,
+                    format!("poll_write outbound_tx error: {}", e),
+                )
+            })?;
 
         Poll::Ready(Ok(buf.len()))
     }
@@ -130,7 +181,7 @@ impl AsyncWrite for Substream {
     }
 
     fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), IoError>> {
-        let mut closed = self.closed.lock().unwrap();
+        let mut closed = self.closed.lock();
         if *closed {
             return Poll::Ready(Err(IoError::new(ErrorKind::Other, "stream closed")));
         }
@@ -146,7 +197,12 @@ impl AsyncWrite for Substream {
                     message: SubstreamMessage::new_close(self.substream_id.clone()),
                 }),
             })
-            .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| {
+                IoError::new(
+                    ErrorKind::Other,
+                    format!("poll_close outbound_rx error: {}", e),
+                )
+            })?;
 
         Poll::Ready(Ok(()))
     }
@@ -155,12 +211,87 @@ impl AsyncWrite for Substream {
 #[cfg(test)]
 mod test {
     use futures::{AsyncReadExt, AsyncWriteExt};
+    use nym_sphinx::addressing::clients::Recipient;
     use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
 
     use super::Substream;
     use crate::message::{ConnectionId, Message, SubstreamId, SubstreamMessage, TransportMessage};
     use crate::mixnet::initialize_mixnet;
     use crate::new_nym_client;
+
+    #[tokio::test]
+    async fn test_substream_poll_read_unread_data() {
+        let (outbound_tx, _) = tokio::sync::mpsc::unbounded_channel();
+
+        const MSG_INNER: &[u8] = "hello".as_bytes();
+        let connection_id = ConnectionId::generate();
+        let substream_id = SubstreamId::generate();
+
+        let (inbound_tx, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (_, close_rx) = tokio::sync::oneshot::channel();
+
+        let mut substream = Substream::new(
+            Recipient::try_from_base58_string("D1rrpsysCGCYXy9saP8y3kmNpGtJZUXN9SvFoUcqAsM9.9Ssso1ea5NfkbMASdiseDSjTN1fSWda5SgEVjdSN4CvV@GJqd3ZxpXWSNxTfx7B1pPtswpetH4LnJdFeLeuY5KUuN").unwrap(),
+            connection_id,
+            substream_id,
+            inbound_rx,
+            outbound_tx,
+            close_rx,
+        );
+
+        // test writing and reading w/ same length data
+        let data = b"hello".to_vec();
+        inbound_tx.send(data.clone()).unwrap();
+        let mut buf = [0u8; 5];
+        let read_len = substream.read(&mut buf).await.unwrap();
+        assert_eq!(read_len, data.len());
+        assert_eq!(buf.to_vec(), data);
+
+        // test writing data longer than read buffer
+        let data = b"nootwashere".to_vec();
+        inbound_tx.send(data.clone()).unwrap();
+
+        let mut buf = [0u8; 4];
+        let read_len = substream.read(&mut buf).await.unwrap();
+        assert_eq!(read_len, buf.len());
+        assert_eq!(buf.to_vec(), b"noot".to_vec());
+
+        let mut buf = [0u8; 7];
+        let read_len = substream.read(&mut buf).await.unwrap();
+        assert_eq!(read_len, buf.len());
+        assert_eq!(buf.to_vec(), b"washere".to_vec());
+
+        // test read buffer larger than written data
+        let data = b"nootwashere".to_vec();
+        inbound_tx.send(data.clone()).unwrap();
+        let mut buf = [0u8; 16];
+        let read_len = substream.read(&mut buf).await.unwrap();
+        assert_eq!(read_len, data.len());
+        assert_eq!(buf[..data.len()], data);
+        assert_eq!(buf[data.len()..].to_vec(), vec![0u8; 16 - data.len()]);
+
+        // test writing data longer than read buffer multiple times
+        let data = b"nootwashere".to_vec();
+        inbound_tx.send(data.clone()).unwrap();
+
+        let mut buf = [0u8; 4];
+        let read_len = substream.read(&mut buf).await.unwrap();
+        assert_eq!(read_len, buf.len());
+        assert_eq!(buf.to_vec(), b"noot".to_vec());
+
+        let data = b"asdf".to_vec();
+        inbound_tx.send(data.clone()).unwrap();
+
+        let mut buf = [0u8; 4];
+        let read_len = substream.read(&mut buf).await.unwrap();
+        assert_eq!(read_len, buf.len());
+        assert_eq!(buf.to_vec(), b"wash".to_vec());
+
+        let mut buf = [0u8; 8];
+        let read_len = substream.read(&mut buf).await.unwrap();
+        assert_eq!(read_len, 7);
+        assert_eq!(buf[..7], b"ereasdf".to_vec());
+    }
 
     #[tokio::test]
     async fn test_substream_read_write() {

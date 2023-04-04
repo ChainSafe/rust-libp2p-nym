@@ -1,4 +1,4 @@
-use libp2p_core::multiaddr;
+use libp2p::core::multiaddr;
 use nym_sphinx::addressing::clients::RecipientFormattingError;
 use tokio_tungstenite::tungstenite::Error as WsError;
 
@@ -40,6 +40,10 @@ pub enum Error {
     ConnectionMessageBytesTooShort,
     #[error("failed to decode ConnectionMessage; no recipient")]
     ConnectionMessageBytesNoRecipient,
+    #[error("failed to decode ConnectionMessage; no peer ID")]
+    ConnectionMessageBytesNoPeerId,
+    #[error("invalid peer ID bytes")]
+    InvalidPeerIdBytes(#[from] multihash::Error),
     #[error("invalid recipient bytes")]
     InvalidRecipientBytes(#[from] RecipientFormattingError),
     #[error("invalid recipient prefix byte")]
