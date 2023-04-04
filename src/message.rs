@@ -1,5 +1,7 @@
+use libp2p::core::PeerId;
 use nym_sphinx::addressing::clients::Recipient;
 use rand_core::{OsRng, RngCore};
+use std::fmt::{Debug, Formatter};
 
 use crate::error::Error;
 
@@ -9,7 +11,7 @@ const SUBSTREAM_ID_LENGTH: usize = 32;
 
 /// ConnectionId is a unique, randomly-generated per-connection ID that's used to
 /// identify which connection a message belongs to.
-#[derive(Clone, Default, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Default, Eq, Hash, PartialEq)]
 pub(crate) struct ConnectionId([u8; 32]);
 
 impl ConnectionId {
@@ -26,9 +28,15 @@ impl ConnectionId {
     }
 }
 
+impl Debug for ConnectionId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
+    }
+}
+
 /// SubstreamId is a unique, randomly-generated per-substream ID that's used to
 /// identify which substream a message belongs to.
-#[derive(Clone, Default, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Default, Eq, Hash, PartialEq)]
 pub struct SubstreamId(pub(crate) [u8; 32]);
 
 impl SubstreamId {
@@ -45,6 +53,12 @@ impl SubstreamId {
     }
 }
 
+impl Debug for SubstreamId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
+    }
+}
+
 #[derive(Debug)]
 #[allow(clippy::enum_variant_names)]
 pub(crate) enum Message {
@@ -54,8 +68,9 @@ pub(crate) enum Message {
 }
 
 /// ConnectionMessage is exchanged to open a new connection.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub(crate) struct ConnectionMessage {
+    pub(crate) peer_id: PeerId,
     pub(crate) id: ConnectionId,
     /// recipient is the sender's Nym address.
     /// only required if this is a ConnectionRequest.
@@ -94,6 +109,7 @@ impl ConnectionMessage {
             }
             None => bytes.push(0u8),
         }
+        bytes.append(&mut self.peer_id.to_bytes());
         bytes
     }
 
@@ -123,7 +139,27 @@ impl ConnectionMessage {
                 return Err(Error::InvalidRecipientPrefixByte);
             }
         };
-        Ok(ConnectionMessage { recipient, id })
+        let peer_id = match recipient {
+            Some(_) => {
+                if bytes.len() < CONNECTION_ID_LENGTH + RECIPIENT_LENGTH + 2 {
+                    return Err(Error::ConnectionMessageBytesNoPeerId);
+                }
+                PeerId::from_bytes(&bytes[CONNECTION_ID_LENGTH + 1 + RECIPIENT_LENGTH..])
+                    .map_err(Error::InvalidPeerIdBytes)?
+            }
+            None => {
+                if bytes.len() < CONNECTION_ID_LENGTH + 2 {
+                    return Err(Error::ConnectionMessageBytesNoPeerId);
+                }
+                PeerId::from_bytes(&bytes[CONNECTION_ID_LENGTH + 1..])
+                    .map_err(Error::InvalidPeerIdBytes)?
+            }
+        };
+        Ok(ConnectionMessage {
+            peer_id,
+            recipient,
+            id,
+        })
     }
 }
 
@@ -145,7 +181,7 @@ impl TransportMessage {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum SubstreamMessageType {
     OpenRequest,
     OpenResponse,
@@ -165,7 +201,7 @@ impl SubstreamMessageType {
 }
 
 /// SubstreamMessage is a message sent over a substream.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct SubstreamMessage {
     pub(crate) substream_id: SubstreamId,
     pub(crate) message_type: SubstreamMessageType,

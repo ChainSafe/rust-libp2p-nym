@@ -16,6 +16,31 @@ DOCKER_BUILD=1 cargo test
 Note that if you've already built the docker image and want to avoid this step,
 you can ignore the `DOCKER_BUILD` environment variable.
 
+## Ping example
+
+To run the libp2p ping example, run the following in one terminal:
+```bash
+cargo run --example ping
+# Local peer id: PeerId("12D3KooWLukBu6q2FerWPFhFFhiYaJkhn2sBmceh9UCaXe6hJf5D")
+# Listening on "/nym/FhtkzizQg2JbZ19kGkRKXdjV2QnFbT5ww88ZAKaD4nkF.7Remi4UVYzn1yL3qYtEcQBGh6tzTYxMdYB4uqyHVc5Z4@62F81C9GrHDRja9WCqozemRFSzFPMecY85MbGwn6efve"
+```
+
+In another terminal, run ping again, passing the Nym multiaddress printed previously:
+```bash
+cargo run --example ping -- /nym/FhtkzizQg2JbZ19kGkRKXdjV2QnFbT5ww88ZAKaD4nkF.7Remi4UVYzn1yL3qYtEcQBGh6tzTYxMdYB4uqyHVc5Z4@62F81C9GrHDRja9WCqozemRFSzFPMecY85MbGwn6efve
+# Local peer id: PeerId("12D3KooWNsuRwG6DHnFJCDR8B3zdvja6xLcfnbtKCsQWJ8eppyWC")
+# Dialed /nym/FhtkzizQg2JbZ19kGkRKXdjV2QnFbT5ww88ZAKaD4nkF.7Remi4UVYzn1yL3qYtEcQBGh6tzTYxMdYB4uqyHVc5Z4@62F81C9GrHDRja9WCqozemRFSzFPMecY85MbGwn6efve
+# Listening on "/nym/2oiRW5C9ivyF3Bo3Gpm4H9EqSKH7A6GpcrRRwVSDVUQ9.EajgCnhzimsP6KskUwKcEj8VFCmHR78s2J6FHWcZ4etR@Fo4f4SQLdoyoGkFae5TpVhRVoXCF8UiypLVGtGjujVPf"
+```
+
+You should see that the nodes connected and pinged each other:
+```bash
+# Mar 30 22:56:36.400  INFO ping: BehaviourEvent: Event { peer: PeerId("12D3KooWGf2oYd6U2nrLzfDrN9zxsjSQjPsMh2oDJPUQ9hiHMNtf"), result: Ok(Ping { rtt: 1.06836675s }) }
+```
+```bash
+# Mar 30 22:56:35.595  INFO ping: BehaviourEvent: Event { peer: PeerId("12D3KooWMd5ak31DXuZq7x1JuFSR6toA5RDQrPaHrfXEhy7vqqpC"), result: Ok(Pong) }
+```
+
 ### Writing New Tests
 
 In order to abstract away the `nym-client` instantiation, we rely on the
@@ -44,7 +69,3 @@ mod test {
 ```
 
 One can create as many of these as needed, limited only by the server resources.
-
-**NOTE**: When using a URI for connections, ensure that you're prefixing the
-URI with the `ws://` protocol type, otherwise the nym client assumes http and
-crashes unceremoniously.

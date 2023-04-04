@@ -1,8 +1,7 @@
-use futures::prelude::*;
-use libp2p_core::{muxing::StreamMuxerEvent, StreamMuxer};
+use libp2p::core::{muxing::StreamMuxerEvent, PeerId, StreamMuxer};
 use nym_sphinx::addressing::clients::Recipient;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     pin::Pin,
     task::{Context, Poll, Waker},
 };
@@ -23,15 +22,20 @@ use crate::substream::Substream;
 /// It implements `StreamMuxer` and thus has stream multiplexing built in.
 #[derive(Debug)]
 pub struct Connection {
+    pub(crate) peer_id: PeerId,
     pub(crate) remote_recipient: Recipient,
     pub(crate) id: ConnectionId,
 
     /// receive inbound messages from the `InnerConnection`
     pub(crate) inbound_rx: UnboundedReceiver<SubstreamMessage>,
 
-    /// substream ID -> pending substream channels
-    /// a result is sent on the channel when the substream is established
-    pending_substreams_tx: HashMap<SubstreamId, oneshot::Sender<Result<(), Error>>>,
+    /// substream ID -> outbound pending substream exists
+    /// the key is deleted when the response is received, or the request times out (TODO)
+    pending_substreams: HashSet<SubstreamId>,
+
+    /// substream ID -> any pending substream data that's to be written
+    /// to the stream once the substream request/response is received
+    pending_substream_data: HashMap<SubstreamId, Vec<u8>>,
 
     /// substream ID -> substream's inbound_tx channel
     substream_inbound_txs: HashMap<SubstreamId, UnboundedSender<Vec<u8>>>,
@@ -48,63 +52,45 @@ pub struct Connection {
     inbound_open_tx: UnboundedSender<Substream>,
     inbound_open_rx: UnboundedReceiver<Substream>,
 
-    /// outbound substream open requests; used in poll_outbound
-    outbound_open_tx: UnboundedSender<Substream>,
-    outbound_open_rx: UnboundedReceiver<Substream>,
-
     /// closed substream IDs; used in poll_close
     close_tx: UnboundedSender<SubstreamId>,
     close_rx: UnboundedReceiver<SubstreamId>,
 
-    // TODO: more wakers?
     waker: Option<Waker>,
-    outbound_waker: Option<Waker>,
 }
 
 impl Connection {
     pub(crate) fn new(
+        peer_id: PeerId,
         remote_recipient: Recipient,
         id: ConnectionId,
         inbound_rx: UnboundedReceiver<SubstreamMessage>,
         mixnet_outbound_tx: UnboundedSender<OutboundMessage>,
     ) -> Self {
         let (inbound_open_tx, inbound_open_rx) = unbounded_channel();
-        let (outbound_open_tx, outbound_open_rx) = unbounded_channel();
         let (close_tx, close_rx) = unbounded_channel();
 
         Connection {
+            peer_id,
             remote_recipient,
             id,
             inbound_rx,
-            pending_substreams_tx: HashMap::new(),
+            pending_substreams: HashSet::new(),
+            pending_substream_data: HashMap::new(),
             substream_inbound_txs: HashMap::new(),
             substream_close_txs: HashMap::new(),
             mixnet_outbound_tx,
             inbound_open_tx,
             inbound_open_rx,
-            outbound_open_tx,
-            outbound_open_rx,
             close_tx,
             close_rx,
             waker: None,
-            outbound_waker: None,
         }
     }
 
-    /// attempts to open a new stream over the connection; returns a future that resolves when the stream is established.
-    #[allow(clippy::type_complexity)]
-    pub fn new_stream(
-        &mut self,
-    ) -> Result<Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>, Error> {
+    fn new_outbound_substream(&mut self) -> Result<Substream, Error> {
         let substream_id = SubstreamId::generate();
-        self.new_stream_with_id(substream_id)
-    }
 
-    #[allow(clippy::type_complexity)]
-    pub fn new_stream_with_id(
-        &mut self,
-        substream_id: SubstreamId,
-    ) -> Result<Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>, Error> {
         // send the substream open request that requests to open a substream with the given ID
         self.mixnet_outbound_tx
             .send(OutboundMessage {
@@ -119,20 +105,16 @@ impl Connection {
             })
             .map_err(|e| Error::OutboundSendError(e.to_string()))?;
 
-        let (tx, rx) = oneshot::channel::<Result<(), Error>>();
-        self.pending_substreams_tx.insert(substream_id, tx);
-
-        if let Some(waker) = self.waker.take() {
-            waker.wake();
+        // track pending outbound substreams
+        // TODO we should probably lock this? storing map values should be atomic
+        let res = self.new_substream(substream_id.clone());
+        if res.is_ok() {
+            self.pending_substreams.insert(substream_id);
         }
-
-        // TODO: response timeout
-        Ok(Box::pin(async move {
-            rx.await.map_err(Error::OneshotRecvError)?
-        }))
+        res
     }
 
-    /// creates a new substream instance with the given ID.
+    // creates a new substream instance with the given ID.
     fn new_substream(&mut self, id: SubstreamId) -> Result<Substream, Error> {
         // check we don't already have a substream with this ID
         if self.substream_inbound_txs.get(&id).is_some() {
@@ -143,6 +125,10 @@ impl Connection {
         let (close_tx, close_rx) = oneshot::channel::<()>();
         self.substream_inbound_txs.insert(id.clone(), inbound_tx);
         self.substream_close_txs.insert(id.clone(), close_tx);
+
+        if let Some(waker) = self.waker.take() {
+            waker.wake();
+        }
 
         Ok(Substream::new(
             self.remote_recipient,
@@ -168,6 +154,40 @@ impl Connection {
             .send(substream_id)
             .map_err(|e| Error::InboundSendError(e.to_string()))
     }
+
+    /// this is called when a substream OpenRequest or OpenResponse is received
+    /// since Nym packets can be received out-of-order, we might receive data for a stream
+    /// before we receive the OpenRequest/Response. in this case, we store the data in
+    /// a pending map and send it to the substream once the OpenRequest/Response is received.
+    ///
+    /// TODO: this data should be cleared out if no OpenRequest/Response is received
+    /// after a certain amount of time.
+    fn send_pending_inbound_data_to_substream(
+        &mut self,
+        substream_id: &SubstreamId,
+    ) -> Result<(), Error> {
+        if let Some(data) = self.pending_substream_data.remove(substream_id) {
+            debug!(
+                "sending pending inbound data to substream: {:?}",
+                substream_id
+            );
+            // send data to substream
+            let Some(inbound_tx) = self
+                    .substream_inbound_txs
+                    .get_mut(substream_id) else {
+                    // this error should NOT happen!!
+                    return Err(Error::InboundSendError(format!("SubstreamMessageType::OpenResponse no substream channel for ID: {:?}", substream_id)));
+            };
+            inbound_tx.send(data).map_err(|e| {
+                Error::InboundSendError(format!(
+                    "failed to send pending inbound data to substream: {}",
+                    e
+                ))
+            })?;
+        }
+
+        Ok(())
+    }
 }
 
 impl StreamMuxer for Connection {
@@ -187,14 +207,9 @@ impl StreamMuxer for Connection {
 
     fn poll_outbound(
         mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
+        _cx: &mut Context<'_>,
     ) -> Poll<Result<Self::Substream, Self::Error>> {
-        if let Poll::Ready(Some(substream)) = self.outbound_open_rx.poll_recv(cx) {
-            return Poll::Ready(Ok(substream));
-        }
-
-        self.outbound_waker = Some(cx.waker().clone());
-        Poll::Pending
+        Poll::Ready(self.new_outbound_substream())
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -228,6 +243,10 @@ impl StreamMuxer for Connection {
                             }),
                         })
                         .map_err(|e| Error::OutboundSendError(e.to_string()))?;
+                    debug!("wrote OpenResponse for substream: {:?}", &msg.substream_id);
+
+                    // check if we have any pending inbound data for this substream and send it if so
+                    self.send_pending_inbound_data_to_substream(&msg.substream_id)?;
 
                     // send the substream to our own channel to be returned in poll_inbound
                     self.inbound_open_tx
@@ -237,42 +256,59 @@ impl StreamMuxer for Connection {
                     debug!("new inbound substream: {:?}", &msg.substream_id);
                 }
                 SubstreamMessageType::OpenResponse => {
-                    if let Some(pending_substream_tx) =
-                        self.pending_substreams_tx.remove(&msg.substream_id)
-                    {
-                        let substream = self.new_substream(msg.substream_id.clone())?;
-
-                        // send the substream to our own channel to be returned in poll_outbound
-                        self.outbound_open_tx
-                            .send(substream)
-                            .map_err(|e| Error::OutboundSendError(e.to_string()))?;
-
-                        // send result to future returned in new_stream
-                        pending_substream_tx
-                            .send(Ok(()))
-                            .map_err(|_| Error::SubstreamSendError)?;
-
+                    if self.pending_substreams.remove(&msg.substream_id) {
+                        // check if we have any pending inbound data for this substream and send it if so
+                        self.send_pending_inbound_data_to_substream(&msg.substream_id)?;
                         debug!("new outbound substream: {:?}", &msg.substream_id);
                     } else {
-                        debug!("no substream pending for ID: {:?}", &msg.substream_id);
-                    }
-
-                    if let Some(waker) = self.outbound_waker.take() {
-                        waker.wake();
+                        debug!(
+                            "SubstreamMessageType::OpenResponse no substream pending for ID: {:?}",
+                            &msg.substream_id
+                        );
                     }
                 }
                 SubstreamMessageType::Close => {
                     self.handle_close(msg.substream_id)?;
                 }
                 SubstreamMessageType::Data(data) => {
-                    if let Some(inbound_tx) = self.substream_inbound_txs.get_mut(&msg.substream_id)
-                    {
-                        inbound_tx
-                            .send(data)
-                            .map_err(|e| Error::InboundSendError(e.to_string()))?;
-                    } else {
-                        debug!("no substream for ID: {:?}", &msg.substream_id);
+                    debug!("SubstreamMessageType::Data: {:?}", &data);
+
+                    // check if this is data that we don't have an inbound stream for
+                    // TODO this is kinda sus and we should clear out the data from memory if we don't
+                    // get an inbound stream within a certain amount of time
+                    let is_pending_inbound =
+                        !self.substream_inbound_txs.contains_key(&msg.substream_id);
+
+                    // check if this an outbound stream that's still pending response
+                    let is_pending_outbound = self.pending_substreams.contains(&msg.substream_id);
+
+                    if is_pending_inbound || is_pending_outbound {
+                        debug!(
+                            "SubstreamMessageType::Data is pending inbound: {:?} or pending outbound: {:?}",
+                            is_pending_inbound, is_pending_outbound
+                        );
+                        // this substream is still pending, so we need to store the data and send it to the substream later
+                        if let Some(mut existing_data) =
+                            self.pending_substream_data.remove(&msg.substream_id)
+                        {
+                            existing_data.extend(data.iter());
+                            self.pending_substream_data
+                                .insert(msg.substream_id.clone(), existing_data);
+                        } else {
+                            self.pending_substream_data
+                                .insert(msg.substream_id.clone(), data);
+                        }
+                        continue;
                     }
+
+                    let inbound_tx = self
+                        .substream_inbound_txs
+                        .get_mut(&msg.substream_id)
+                        .expect("must have a substream channel for non-pending substream");
+
+                    // NOTE: this ignores channel closed errors, which is fine because the substream
+                    // might have been closed/dropped
+                    inbound_tx.send(data).ok();
                 }
             }
         }
@@ -344,9 +380,13 @@ mod test {
 
         let connection_id = ConnectionId::generate();
 
-        // send SubstreamMessage::OpenRequest to the remote peer
+        let recipient_peer_id = PeerId::random();
+        let sender_peer_id = PeerId::random();
+
+        // create the connections
         let (sender_inbound_tx, sender_inbound_rx) = unbounded_channel::<SubstreamMessage>();
         let mut sender_connection = Connection::new(
+            recipient_peer_id,
             recipient_address,
             connection_id.clone(),
             sender_inbound_rx,
@@ -354,6 +394,7 @@ mod test {
         );
         let (recipient_inbound_tx, recipient_inbound_rx) = unbounded_channel::<SubstreamMessage>();
         let mut recipient_connection = Connection::new(
+            sender_peer_id,
             sender_address,
             connection_id.clone(),
             recipient_inbound_rx,
@@ -361,13 +402,10 @@ mod test {
         );
 
         // send the substream OpenRequest to the mixnet
-        let substream_id = SubstreamId::generate();
-        let sender_stream_fut = sender_connection
-            .new_stream_with_id(substream_id.clone())
-            .unwrap();
+        let mut sender_substream = sender_connection.new_outbound_substream().unwrap();
         assert!(sender_connection
-            .pending_substreams_tx
-            .contains_key(&substream_id));
+            .pending_substreams
+            .contains(&sender_substream.substream_id));
 
         // poll the recipient inbound stream; should receive the OpenRequest and create the substream
         inbound_receive_and_send(
@@ -397,12 +435,7 @@ mod test {
 
         // poll sender's poll_outbound to get the substream
         poll_fn(|cx| Pin::new(&mut sender_connection).as_mut().poll(cx)).now_or_never();
-        let mut sender_substream =
-            poll_fn(|cx| Pin::new(&mut sender_connection).as_mut().poll_outbound(cx))
-                .await
-                .unwrap();
-        assert!(sender_connection.pending_substreams_tx.is_empty());
-        sender_stream_fut.await.unwrap();
+        assert!(sender_connection.pending_substreams.is_empty());
 
         // finally, write message to the substream
         let data = b"hello world";
