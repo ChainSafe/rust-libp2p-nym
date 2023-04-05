@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 futures = "0.3.26"
 hex = "0.4"
-libp2p = { version = "0.51.0", features = [ "identify", "macros", "ping", "tokio", "gossipsub" ]}
+libp2p = { version = "0.51.0", features = [ "identify", "macros", "ping", "tokio" ]}
 multihash = "0.17"
 nym-websocket = { package = "websocket-requests", git = "https://github.com/nymtech/nym" }
 nym-sphinx = { package = "nym-sphinx", git = "https://github.com/nymtech/nym" }

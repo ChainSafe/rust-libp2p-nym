@@ -1,4 +1,3 @@
-use crate::message::SubstreamMessageType;
 use futures::prelude::*;
 use libp2p::core::{
     identity::Keypair,
@@ -241,9 +240,6 @@ impl NymTransport {
             }
             Message::TransportMessage(msg) => {
                 debug!("got inbound TransportMessage: {:?}", msg);
-                if let SubstreamMessageType::Data(data) = &msg.message.message_type {
-                    debug!("message data: {}", String::from_utf8_lossy(&data));
-                }
                 self.handle_transport_message(&msg)
                     .map(|_| InboundTransportEvent::TransportMessage)
             }
