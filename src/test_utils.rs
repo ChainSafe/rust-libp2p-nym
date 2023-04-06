@@ -9,7 +9,7 @@ use testcontainers::{clients::Cli, core::WaitFor, images::generic::GenericImage,
 pub fn create_nym_client<'a>(
     docker_client: &'a Cli,
     nym_id: &str,
-) -> (Container<'a, GenericImage>, u16, String) {
+) -> (Container<'a, GenericImage>, String) {
     let nym_ready_message = WaitFor::message_on_stderr("Client startup finished!");
     let nym_image = GenericImage::new("nym", "latest")
         .with_env_var("NYM_ID", nym_id)
@@ -18,5 +18,5 @@ pub fn create_nym_client<'a>(
     let nym_container = docker_client.run(nym_image);
     let nym_port = nym_container.get_host_port_ipv4(1977);
     let nym_uri = format!("ws://0.0.0.0:{nym_port}");
-    (nym_container, nym_port, nym_uri)
+    (nym_container, nym_uri)
 }

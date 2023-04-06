@@ -366,12 +366,12 @@ mod test {
     async fn test_connection_stream_muxer() {
         let docker_client = clients::Cli::default();
         let nym_id = "test_connection_stream_muxer_sender";
-        let (_container1, _nym_port1, sender_uri) = create_nym_client(&docker_client, nym_id);
+        let (_container1, sender_uri) = create_nym_client(&docker_client, nym_id);
         let (sender_address, mut sender_mixnet_inbound_rx, sender_outbound_tx) =
             initialize_mixnet(&sender_uri, None).await.unwrap();
 
         let nym_id = "test_connection_stream_muxer_recipient";
-        let (_container2, _nym_port2, recipient_uri) = create_nym_client(&docker_client, nym_id);
+        let (_container2, recipient_uri) = create_nym_client(&docker_client, nym_id);
         let (recipient_address, mut recipient_mixnet_inbound_rx, recipient_outbound_tx) =
             initialize_mixnet(&recipient_uri, None).await.unwrap();
 

@@ -468,7 +468,7 @@ mod test {
 
         let docker_client = clients::Cli::default();
         let nym_id = "test_transport_connection_dialer";
-        let (_container1, _nym_port, dialer_uri) = create_nym_client(&docker_client, nym_id);
+        let (_container1, dialer_uri) = create_nym_client(&docker_client, nym_id);
         let (dialer_notify_inbound_tx, mut dialer_notify_inbound_rx) = unbounded_channel();
         let mut dialer_transport =
             NymTransport::new_with_notify_inbound(&dialer_uri, dialer_notify_inbound_tx)
@@ -476,7 +476,7 @@ mod test {
                 .unwrap();
 
         let nym_id = "test_transport_connection_listener";
-        let (_container2, _nym_port, listener_uri) = create_nym_client(&docker_client, nym_id);
+        let (_container2, listener_uri) = create_nym_client(&docker_client, nym_id);
         let (listener_notify_inbound_tx, mut listener_notify_inbound_rx) = unbounded_channel();
         let mut listener_transport =
             NymTransport::new_with_notify_inbound(&listener_uri, listener_notify_inbound_tx)
@@ -606,7 +606,7 @@ mod test {
     async fn test_transport_substream() {
         let docker_client = clients::Cli::default();
         let nym_id = "test_transport_substream_dialer";
-        let (_container, _nymn_port, dialer_uri) = create_nym_client(&docker_client, nym_id);
+        let (_container, dialer_uri) = create_nym_client(&docker_client, nym_id);
         let (dialer_notify_inbound_tx, mut dialer_notify_inbound_rx) = unbounded_channel();
         let mut dialer_transport =
             NymTransport::new_with_notify_inbound(&dialer_uri, dialer_notify_inbound_tx)
@@ -614,7 +614,7 @@ mod test {
                 .unwrap();
 
         let nym_id = "test_transport_substream_listener";
-        let (_container1, _nym_port, listener_uri) = create_nym_client(&docker_client, nym_id);
+        let (_container1, listener_uri) = create_nym_client(&docker_client, nym_id);
         let (listener_notify_inbound_tx, mut listener_notify_inbound_rx) = unbounded_channel();
         let mut listener_transport =
             NymTransport::new_with_notify_inbound(&listener_uri, listener_notify_inbound_tx)

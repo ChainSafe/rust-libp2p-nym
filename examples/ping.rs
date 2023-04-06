@@ -60,8 +60,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let nym_id = rand::random::<u64>().to_string();
     let docker_client = clients::Cli::default();
-    let (_nym_container, nym_port, dialer_uri) = create_nym_client(&docker_client, &nym_id);
-    info!("nym_port: {}", nym_port);
+    let (_nym_container, dialer_uri) = create_nym_client(&docker_client, &nym_id);
     info!("dialer_uri: {}", dialer_uri);
 
     let local_key = identity::Keypair::generate_ed25519();

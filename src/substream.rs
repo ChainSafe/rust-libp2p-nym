@@ -297,7 +297,7 @@ mod test {
     async fn test_substream_read_write() {
         let docker_client = clients::Cli::default();
         let nym_id = "test_substream_read_write";
-        let (_container, _nym_port, uri) = create_nym_client(&docker_client, nym_id);
+        let (_container, uri) = create_nym_client(&docker_client, nym_id);
         let (self_address, mut mixnet_inbound_rx, outbound_tx) =
             initialize_mixnet(&uri, None).await.unwrap();
 
@@ -377,7 +377,7 @@ mod test {
     async fn test_substream_recv_close() {
         let docker_client = clients::Cli::default();
         let nym_id = "test_substream_recv_close";
-        let (_container1, _nym_port, uri) = create_nym_client(&docker_client, nym_id);
+        let (_container1, uri) = create_nym_client(&docker_client, nym_id);
         let (self_address, _, outbound_tx) = initialize_mixnet(&uri, None).await.unwrap();
 
         const MSG_INNER: &[u8] = "hello".as_bytes();
