@@ -17,6 +17,6 @@ pub fn create_nym_client<'a>(
         .with_exposed_port(1977);
     let nym_container = docker_client.run(nym_image);
     let nym_port = nym_container.get_host_port_ipv4(1977);
-    let dialer_uri = format!("ws://0.0.0.0:{nym_port}");
-    (nym_container, nym_port, dialer_uri)
+    let nym_uri = format!("ws://0.0.0.0:{nym_port}");
+    (nym_container, nym_port, nym_uri)
 }
