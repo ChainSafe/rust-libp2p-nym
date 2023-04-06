@@ -1,8 +1,10 @@
 use libp2p::core::{muxing::StreamMuxerEvent, PeerId, StreamMuxer};
 use nym_sphinx::addressing::clients::Recipient;
+use parking_lot::Mutex;
 use std::{
     collections::{HashMap, HashSet},
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll, Waker},
 };
 use tokio::sync::{
@@ -56,6 +58,8 @@ pub struct Connection {
     close_tx: UnboundedSender<SubstreamId>,
     close_rx: UnboundedReceiver<SubstreamId>,
 
+    pub(crate) message_nonce: Arc<Mutex<u64>>,
+
     waker: Option<Waker>,
 }
 
@@ -84,6 +88,7 @@ impl Connection {
             inbound_open_rx,
             close_tx,
             close_rx,
+            message_nonce: Arc::new(Mutex::new(0)),
             waker: None,
         }
     }
@@ -91,11 +96,18 @@ impl Connection {
     fn new_outbound_substream(&mut self) -> Result<Substream, Error> {
         let substream_id = SubstreamId::generate();
 
+        let nonce = {
+            let mut nonce = self.message_nonce.lock();
+            *nonce += 1;
+            *nonce
+        };
+
         // send the substream open request that requests to open a substream with the given ID
         self.mixnet_outbound_tx
             .send(OutboundMessage {
                 recipient: self.remote_recipient,
                 message: Message::TransportMessage(TransportMessage {
+                    nonce,
                     id: self.id.clone(),
                     message: SubstreamMessage {
                         substream_id: substream_id.clone(),
@@ -137,6 +149,7 @@ impl Connection {
             inbound_rx,
             self.mixnet_outbound_tx.clone(),
             close_rx,
+            self.message_nonce.clone(),
         ))
     }
 
@@ -230,11 +243,18 @@ impl StreamMuxer for Connection {
                     // create a new substream with the given ID
                     let substream = self.new_substream(msg.substream_id.clone())?;
 
+                    let nonce = {
+                        let mut nonce = self.message_nonce.lock();
+                        *nonce += 1;
+                        *nonce
+                    };
+
                     // send the response to the remote peer
                     self.mixnet_outbound_tx
                         .send(OutboundMessage {
                             recipient: self.remote_recipient,
                             message: Message::TransportMessage(TransportMessage {
+                                nonce,
                                 id: self.id.clone(),
                                 message: SubstreamMessage {
                                     substream_id: msg.substream_id.clone(),
@@ -351,10 +371,16 @@ mod test {
         connection_id: ConnectionId,
         mixnet_inbound_rx: &mut UnboundedReceiver<InboundMessage>,
         inbound_tx: &UnboundedSender<SubstreamMessage>,
+        expected_nonce: u64,
     ) {
         let recv_msg = mixnet_inbound_rx.recv().await.unwrap();
         match recv_msg.0 {
-            Message::TransportMessage(TransportMessage { id, message: msg }) => {
+            Message::TransportMessage(TransportMessage {
+                nonce,
+                id,
+                message: msg,
+            }) => {
+                assert_eq!(nonce, expected_nonce);
                 assert_eq!(id, connection_id);
                 inbound_tx.send(msg).unwrap();
             }
@@ -412,6 +438,7 @@ mod test {
             connection_id.clone(),
             &mut recipient_mixnet_inbound_rx,
             &recipient_inbound_tx,
+            1,
         )
         .await;
         poll_fn(|cx| Pin::new(&mut recipient_connection).as_mut().poll(cx)).now_or_never();
@@ -430,6 +457,7 @@ mod test {
             connection_id.clone(),
             &mut sender_mixnet_inbound_rx,
             &sender_inbound_tx,
+            1,
         )
         .await;
 
@@ -446,6 +474,7 @@ mod test {
             connection_id.clone(),
             &mut recipient_mixnet_inbound_rx,
             &recipient_inbound_tx,
+            2,
         )
         .await;
 
@@ -466,6 +495,7 @@ mod test {
             connection_id.clone(),
             &mut recipient_mixnet_inbound_rx,
             &recipient_inbound_tx,
+            3,
         )
         .await;
     }

@@ -80,6 +80,11 @@ pub(crate) struct ConnectionMessage {
 /// TransportMessage is sent over a connection after establishment.
 #[derive(Debug)]
 pub(crate) struct TransportMessage {
+    /// increments by 1 for every TransportMessage sent over a connection.
+    /// required for ordering, since Nym does not guarantee ordering.
+    /// ConnectionMessages do not need nonces, as we know that they will
+    /// be the first messages sent over a connection.
+    pub(crate) nonce: u64,
     pub(crate) message: SubstreamMessage,
     pub(crate) id: ConnectionId,
 }
@@ -165,19 +170,26 @@ impl ConnectionMessage {
 
 impl TransportMessage {
     fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = self.id.0.to_vec();
+        let mut bytes = self.nonce.to_be_bytes().to_vec();
+        bytes.extend_from_slice(&self.id.0.to_vec());
         bytes.extend_from_slice(&self.message.to_bytes());
         bytes
     }
 
     fn try_from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.len() < CONNECTION_ID_LENGTH + 1 {
+        if bytes.len() < CONNECTION_ID_LENGTH + 9 {
             return Err(Error::TransportMessageBytesTooShort);
         }
 
-        let id = ConnectionId::from_bytes(&bytes[0..CONNECTION_ID_LENGTH]);
-        let message = SubstreamMessage::try_from_bytes(&bytes[CONNECTION_ID_LENGTH..])?;
-        Ok(TransportMessage { message, id })
+        let nonce = u64::from_be_bytes(
+            bytes[0..8]
+                .to_vec()
+                .try_into()
+                .map_err(|_| Error::InvalidNonce)?,
+        );
+        let id = ConnectionId::from_bytes(&bytes[8..8 + CONNECTION_ID_LENGTH]);
+        let message = SubstreamMessage::try_from_bytes(&bytes[8 + CONNECTION_ID_LENGTH..])?;
+        Ok(TransportMessage { nonce, message, id })
     }
 }
 

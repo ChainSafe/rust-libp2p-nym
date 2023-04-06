@@ -190,6 +190,7 @@ mod test {
         let msg_inner = "hello".as_bytes();
         let substream_id = SubstreamId::generate();
         let msg = Message::TransportMessage(TransportMessage {
+            nonce: 1, // arbitrary
             id: ConnectionId::generate(),
             message: SubstreamMessage::new_with_data(substream_id.clone(), msg_inner.to_vec()),
         });

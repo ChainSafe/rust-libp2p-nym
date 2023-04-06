@@ -435,10 +435,17 @@ mod test {
 
     impl Connection {
         fn write(&self, msg: SubstreamMessage) -> Result<(), Error> {
+            let nonce = {
+                let mut nonce = self.message_nonce.lock();
+                *nonce += 1;
+                *nonce
+            };
+
             self.mixnet_outbound_tx
                 .send(OutboundMessage {
                     recipient: self.remote_recipient,
                     message: Message::TransportMessage(TransportMessage {
+                        nonce,
                         id: self.id.clone(),
                         message: msg,
                     }),
