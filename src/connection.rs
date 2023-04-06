@@ -432,6 +432,7 @@ mod test {
         assert!(sender_connection
             .pending_substreams
             .contains(&sender_substream.substream_id));
+        assert_eq!(*sender_connection.message_nonce.lock(), 1);
 
         // poll the recipient inbound stream; should receive the OpenRequest and create the substream
         inbound_receive_and_send(
@@ -442,6 +443,7 @@ mod test {
         )
         .await;
         poll_fn(|cx| Pin::new(&mut recipient_connection).as_mut().poll(cx)).now_or_never();
+        assert_eq!(*recipient_connection.message_nonce.lock(), 1);
 
         // poll recipient's poll_inbound to receive the substream
         let maybe_recipient_substream = poll_fn(|cx| {
@@ -468,6 +470,7 @@ mod test {
         // finally, write message to the substream
         let data = b"hello world";
         sender_substream.write_all(data).await.unwrap();
+        assert_eq!(*sender_connection.message_nonce.lock(), 2);
 
         // receive message from the mixnet, push to the recipient Connection inbound channel
         inbound_receive_and_send(
@@ -491,6 +494,7 @@ mod test {
 
         // test closing the stream; assert the stream is closed on both sides
         sender_substream.close().await.unwrap();
+        assert_eq!(*sender_connection.message_nonce.lock(), 3);
         inbound_receive_and_send(
             connection_id.clone(),
             &mut recipient_mixnet_inbound_rx,

@@ -171,7 +171,7 @@ impl ConnectionMessage {
 impl TransportMessage {
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = self.nonce.to_be_bytes().to_vec();
-        bytes.extend_from_slice(&self.id.0.to_vec());
+        bytes.extend_from_slice(self.id.0.as_ref());
         bytes.extend_from_slice(&self.message.to_bytes());
         bytes
     }
@@ -190,6 +190,26 @@ impl TransportMessage {
         let id = ConnectionId::from_bytes(&bytes[8..8 + CONNECTION_ID_LENGTH]);
         let message = SubstreamMessage::try_from_bytes(&bytes[8 + CONNECTION_ID_LENGTH..])?;
         Ok(TransportMessage { nonce, message, id })
+    }
+}
+
+impl Ord for TransportMessage {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.nonce.cmp(&other.nonce)
+    }
+}
+
+impl std::cmp::PartialOrd for TransportMessage {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl std::cmp::Eq for TransportMessage {}
+
+impl std::cmp::PartialEq for TransportMessage {
+    fn eq(&self, other: &Self) -> bool {
+        self.nonce == other.nonce
     }
 }
 

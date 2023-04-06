@@ -190,7 +190,9 @@ impl AsyncWrite for Substream {
     }
 
     fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), IoError>> {
-        let nonce = self.message_nonce.lock();
+        let mut nonce = self.message_nonce.lock();
+        *nonce += 1;
+
         let mut closed = self.closed.lock();
         if *closed {
             return Poll::Ready(Err(IoError::new(ErrorKind::Other, "stream closed")));
