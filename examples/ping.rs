@@ -44,9 +44,9 @@ use libp2p::core::{muxing::StreamMuxerBox, transport::Transport};
 use libp2p::futures::StreamExt;
 use libp2p::swarm::{keep_alive, NetworkBehaviour, SwarmBuilder, SwarmEvent};
 use libp2p::{identity, ping, Multiaddr, PeerId};
-use rust_libp2p_nym::{new_nym_client, transport::NymTransport};
+use rust_libp2p_nym::{test_utils::create_nym_client, transport::NymTransport};
 use std::error::Error;
-use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
+use testcontainers::clients;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -59,9 +59,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .init();
 
     let nym_id = rand::random::<u64>().to_string();
-    #[allow(unused)]
-    let dialer_uri: String = Default::default();
-    new_nym_client!(nym_id, dialer_uri);
+    let docker_client = clients::Cli::default();
+    let (_nym_container, nym_port, dialer_uri) = create_nym_client(&docker_client, &nym_id);
+    info!("nym_port: {}", nym_port);
+    info!("dialer_uri: {}", dialer_uri);
 
     let local_key = identity::Keypair::generate_ed25519();
     let local_peer_id = PeerId::from(local_key.public());
