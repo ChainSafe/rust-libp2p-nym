@@ -126,8 +126,11 @@ impl NymTransport {
             return Err(Error::NoConnectionForTransportMessage);
         };
 
-        let queue = match self.message_queues.get_mut(id) {
+        match self.message_queues.get_mut(id) {
             Some(queue) => {
+                // update expected nonce
+                queue.set_connection_message_received();
+
                 // push pending inbound some messages in this case
                 while let Some(msg) = queue.pop() {
                     debug!(
@@ -138,16 +141,15 @@ impl NymTransport {
                         .send(msg.message.clone())
                         .map_err(|e| Error::InboundSendError(e.to_string()))?;
                 }
-                queue
             }
             None => {
                 // no queue exists for this connection, create one
                 let queue = MessageQueue::new();
                 self.message_queues.insert(id.clone(), queue);
-                self.message_queues.get_mut(id).unwrap()
+                let queue = self.message_queues.get_mut(id).unwrap();
+                queue.set_connection_message_received();
             }
         };
-        queue.set_connection_message_received();
 
         debug!("returning from handle_message_queue_on_connection_initiation");
         Ok(())

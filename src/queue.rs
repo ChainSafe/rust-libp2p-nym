@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 use crate::message::TransportMessage;
 
@@ -22,7 +22,7 @@ impl MessageQueue {
             nonces += &msg.nonce.to_string();
             nonces += ", ";
         });
-        info!("MessageQueue: [{:?}]", nonces);
+        debug!("MessageQueue: [{:?}]", nonces);
     }
 
     pub(crate) fn set_connection_message_received(&mut self) {
@@ -43,14 +43,17 @@ impl MessageQueue {
             Some(msg)
         } else {
             if msg.nonce < self.next_expected_nonce {
+                // this shouldn't happen normally, only if the other node
+                // is not following the protocol
                 warn!("received a message with a nonce that is too low");
                 return None;
             }
             self.queue.push_back(msg);
             self.queue.make_contiguous().sort();
-            // would probably be better to check for duplicates before insertion?
-            // also would allow us to log that we received duplicates
-            // TODO
+            // TODO: we need  to check for duplicates before insertion?
+            // also log that we received duplicates
+            // if a node sends us messages with duplicate nonces, should we
+            // disconnect as they're not following the protocol?
             // self.queue.dedup();
             None
         }
