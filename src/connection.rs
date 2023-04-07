@@ -234,7 +234,7 @@ impl StreamMuxer for Connection {
                 self.pending_substreams.remove(&msg.substream_id);
                 self.pending_substream_data.remove(&msg.substream_id);
 
-                return Poll::Ready(Err(Error::ConnectionTimeout(self.poll_timeout)));
+                return Poll::Ready(Err(Error::StreamOpenTimeout(self.poll_timeout)));
             }
 
             match msg.message_type {
