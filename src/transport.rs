@@ -249,6 +249,15 @@ impl NymTransport {
             return Err(Error::NoConnectionForTransportMessage);
         };
 
+        // send original message
+        debug!(
+            "sending original message with nonce {} for connection",
+            nonce
+        );
+        inbound_tx
+            .send(msg.message.clone())
+            .map_err(|e| Error::InboundSendError(e.to_string()))?;
+
         // try to pop queued messages and send them on inbound channel
         while let Some(msg) = queue.pop() {
             debug!(
@@ -259,15 +268,6 @@ impl NymTransport {
                 .send(msg.message.clone())
                 .map_err(|e| Error::InboundSendError(e.to_string()))?;
         }
-
-        // finally, send original message
-        debug!(
-            "sending original message with nonce {} for connection",
-            nonce
-        );
-        inbound_tx
-            .send(msg.message.clone())
-            .map_err(|e| Error::InboundSendError(e.to_string()))?;
 
         if let Some(waker) = self.waker.clone().take() {
             waker.wake();
