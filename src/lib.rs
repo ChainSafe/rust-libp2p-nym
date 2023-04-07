@@ -10,4 +10,4 @@ pub mod transport;
 const DEFAULT_HANDSHAKE_TIMEOUT_SECS: u64 = 5;
 
 /// The deafult timeout secs for [`connection::Connection`] polling.
-const DEFAULT_POLL_TIMEOUT_SECS: u64 = 5;
+const DEFAULT_OPEN_TIMEOUT_SECS: u64 = 5;

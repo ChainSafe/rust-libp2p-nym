@@ -74,6 +74,6 @@ pub enum Error {
     SendErrorTransportEvent,
     #[error("dial address timed out")]
     DialTimeout(#[from] tokio::time::error::Elapsed),
-    #[error("failed to establish network connection {0:?}")]
-    StreamOpenTimeout(std::time::Duration),
+    #[error("stream open timeout {0:?}")]
+    StreamOpenTimeout(SubstreamId),
 }

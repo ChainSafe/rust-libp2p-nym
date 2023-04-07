@@ -88,6 +88,12 @@ impl NymTransport {
         Self::new_maybe_with_notify_inbound(uri, keypair, None, Some(timeout)).await
     }
 
+    /// Add timeout to transport and return self.
+    pub async fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.handshake_timeout = timeout;
+        self
+    }
+
     async fn new_maybe_with_notify_inbound(
         uri: &String,
         keypair: Keypair,

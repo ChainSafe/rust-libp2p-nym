@@ -187,6 +187,7 @@ pub(crate) enum SubstreamMessageType {
     OpenResponse,
     Close,
     Data(Vec<u8>),
+    OpenTimeout,
 }
 
 impl SubstreamMessageType {
@@ -196,6 +197,7 @@ impl SubstreamMessageType {
             SubstreamMessageType::OpenResponse => 1,
             SubstreamMessageType::Close => 2,
             SubstreamMessageType::Data(_) => 3,
+            SubstreamMessageType::OpenTimeout => 4,
         }
     }
 }
