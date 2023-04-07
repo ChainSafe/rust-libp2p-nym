@@ -161,9 +161,13 @@ impl Connection {
             .map_err(|e| Error::InboundSendError(e.to_string()))
     }
 
+    // TODO: make this handler also be used for inbound substreams?
     fn handle_timeout(&mut self, substream_id: &SubstreamId) {
-        self.pending_substreams.remove(substream_id);
-        self.pending_substream_data.remove(substream_id);
+        // NOTE: this will be always `some` for now since this function
+        // only trigged by the timeout of pending outbound substreams.
+        if self.pending_substreams.remove(substream_id).is_some() {
+            self.pending_substream_data.remove(substream_id);
+        }
     }
 
     /// this is called when a substream OpenRequest or OpenResponse is received
