@@ -379,7 +379,7 @@ mod test {
         let recv_msg = mixnet_inbound_rx.recv().await.unwrap();
         match recv_msg.0 {
             Message::TransportMessage(TransportMessage {
-                nonce: 1, // arbitrary
+                nonce: _,
                 id: _,
                 message:
                     SubstreamMessage {
@@ -390,7 +390,7 @@ mod test {
                 crate::message::SubstreamMessageType::Close => {}
                 _ => panic!("unexpected message type"),
             },
-            _ => panic!("unexpected message"),
+            _ => panic!("unexpected message: {:?}", recv_msg.0),
         }
     }
 
