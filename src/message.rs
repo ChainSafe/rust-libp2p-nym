@@ -84,6 +84,7 @@ pub(crate) struct TransportMessage {
     /// required for ordering, since Nym does not guarantee ordering.
     /// ConnectionMessages do not need nonces, as we know that they will
     /// be the first messages sent over a connection.
+    /// the first TransportMessage sent over a connection will have nonce 1.
     pub(crate) nonce: u64,
     pub(crate) message: SubstreamMessage,
     pub(crate) id: ConnectionId,
