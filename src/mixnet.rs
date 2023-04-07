@@ -38,6 +38,7 @@ pub(crate) async fn initialize_mixnet(
 
     // a channel of inbound messages from the mixnet..
     // the transport reads from (listens) to the inbound_rx.
+    // TODO: this is probably a DOS vector; we should limit the size of the channel.
     let (inbound_tx, inbound_rx) = unbounded_channel::<InboundMessage>();
 
     // a channel of outbound messages to be written to the mixnet.

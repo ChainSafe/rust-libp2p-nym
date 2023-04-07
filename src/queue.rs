@@ -1,11 +1,32 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use tracing::{debug, warn};
 
 use crate::message::TransportMessage;
 
+/// MessageQueue is a queue of messages, ordered by nonce, that we've
+/// received but are not yet able to process because we're waiting for
+/// a message with the next expected nonce first.
+/// This is required because Nym does not guarantee any sort of message
+/// ordering, only delivery.
+/// TODO: is there a DOS vector here where a malicious peer sends us
+/// messages only with nonce higher than the next expected nonce?
 pub(crate) struct MessageQueue {
+    /// nonce of the next message we expect to receive on the
+    /// connection.
+    /// any messages with a nonce greater than this are pushed into
+    /// the queue.
+    /// if we get a message with a nonce equal to this, then we
+    /// immediately handle it in the transport and increment the nonce.
     next_expected_nonce: u64,
+
+    /// the actual queue of messages, ordered by nonce.
+    /// the head of the queue's nonce is always greater
+    /// than the next expected nonce.
     queue: VecDeque<TransportMessage>,
+
+    /// tracks the nonces that exist in the queue.
+    /// used to check for duplicate nonces on push.
+    nonce_set: HashSet<u64>,
 }
 
 impl MessageQueue {
@@ -13,6 +34,7 @@ impl MessageQueue {
         MessageQueue {
             next_expected_nonce: 0,
             queue: VecDeque::new(),
+            nonce_set: HashSet::new(),
         }
     }
 
@@ -25,6 +47,8 @@ impl MessageQueue {
         debug!("MessageQueue: [{:?}]", nonces);
     }
 
+    /// sets the next expected nonce to 1, indicating that we've received
+    /// a ConnectionRequest or ConnectionResponse.
     pub(crate) fn set_connection_message_received(&mut self) {
         if self.next_expected_nonce != 0 {
             panic!("connection message received twice");
@@ -48,13 +72,17 @@ impl MessageQueue {
                 warn!("received a message with a nonce that is too low");
                 return None;
             }
+
+            if self.nonce_set.contains(&msg.nonce) {
+                // this shouldn't happen normally, only if the other node
+                // is not following the protocol
+                warn!("received a message with a duplicate nonce");
+                return None;
+            }
+
+            self.nonce_set.insert(msg.nonce);
             self.queue.push_back(msg);
             self.queue.make_contiguous().sort();
-            // TODO: we need  to check for duplicates before insertion?
-            // also log that we received duplicates
-            // if a node sends us messages with duplicate nonces, should we
-            // disconnect as they're not following the protocol?
-            // self.queue.dedup();
             None
         }
     }
@@ -66,6 +94,7 @@ impl MessageQueue {
 
         if head.nonce == self.next_expected_nonce {
             self.next_expected_nonce += 1;
+            self.nonce_set.remove(&head.nonce);
             Some(self.queue.pop_front().unwrap())
         } else {
             None
