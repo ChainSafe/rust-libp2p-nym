@@ -236,7 +236,6 @@ impl NymTransport {
             id,
             inbound_rx,
             self.outbound_tx.clone(),
-            None,
         );
 
         // inbound_tx is what we write to when receiving messages on the mixnet,

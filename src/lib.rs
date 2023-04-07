@@ -8,6 +8,3 @@ pub mod transport;
 
 /// The deafult timeout secs for [`transport::Upgrade`] future.
 const DEFAULT_HANDSHAKE_TIMEOUT_SECS: u64 = 5;
-
-/// The deafult timeout secs for [`connection::Connection`] polling.
-const DEFAULT_OPEN_TIMEOUT_SECS: u64 = 5;

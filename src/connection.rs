@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     pin::Pin,
     task::{Context, Poll, Waker},
-    time::{Duration, Instant},
+    time::Instant,
 };
 use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
@@ -18,7 +18,6 @@ use crate::message::{
     TransportMessage,
 };
 use crate::substream::Substream;
-use crate::DEFAULT_OPEN_TIMEOUT_SECS;
 
 /// Connection represents the result of a connection setup process.
 /// It implements `StreamMuxer` and thus has stream multiplexing built in.
@@ -59,7 +58,6 @@ pub struct Connection {
     close_rx: UnboundedReceiver<SubstreamId>,
 
     waker: Option<Waker>,
-    substream_timeout: Duration,
 }
 
 impl Connection {
@@ -69,7 +67,6 @@ impl Connection {
         id: ConnectionId,
         inbound_rx: UnboundedReceiver<SubstreamMessage>,
         mixnet_outbound_tx: UnboundedSender<OutboundMessage>,
-        poll_timeout: Option<Duration>,
     ) -> Self {
         let (inbound_open_tx, inbound_open_rx) = unbounded_channel();
         let (close_tx, close_rx) = unbounded_channel();
@@ -89,8 +86,6 @@ impl Connection {
             close_tx,
             close_rx,
             waker: None,
-            substream_timeout: poll_timeout
-                .unwrap_or(Duration::from_secs(DEFAULT_OPEN_TIMEOUT_SECS)),
         }
     }
 
@@ -161,15 +156,6 @@ impl Connection {
             .map_err(|e| Error::InboundSendError(e.to_string()))
     }
 
-    // TODO: make this handler also be used for inbound substreams?
-    fn handle_timeout(&mut self, substream_id: &SubstreamId) {
-        // NOTE: this will be always `some` for now since this function
-        // only trigged by the timeout of pending outbound substreams.
-        if self.pending_substreams.remove(substream_id).is_some() {
-            self.pending_substream_data.remove(substream_id);
-        }
-    }
-
     /// this is called when a substream OpenRequest or OpenResponse is received
     /// since Nym packets can be received out-of-order, we might receive data for a stream
     /// before we receive the OpenRequest/Response. in this case, we store the data in
@@ -199,24 +185,6 @@ impl Connection {
         }
 
         Ok(())
-    }
-
-    fn poll_message(&mut self, cx: &mut Context<'_>) -> Poll<Option<SubstreamMessage>> {
-        loop {
-            // filter out any substreams that have timed out
-            for (substream_id, instant) in self.pending_substreams.iter() {
-                if instant.elapsed() >= self.substream_timeout {
-                    return Poll::Ready(Some(SubstreamMessage {
-                        substream_id: substream_id.clone(),
-                        message_type: SubstreamMessageType::OpenTimeout,
-                    }));
-                }
-            }
-
-            if let Poll::Ready(Some(msg)) = self.inbound_rx.poll_recv(cx) {
-                return Poll::Ready(Some(msg));
-            }
-        }
     }
 }
 
@@ -254,7 +222,7 @@ impl StreamMuxer for Connection {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<StreamMuxerEvent, Self::Error>> {
-        while let Poll::Ready(Some(msg)) = self.poll_message(cx) {
+        while let Poll::Ready(Some(msg)) = self.inbound_rx.poll_recv(cx) {
             match msg.message_type {
                 SubstreamMessageType::OpenRequest => {
                     // create a new substream with the given ID
@@ -338,13 +306,6 @@ impl StreamMuxer for Connection {
                     // NOTE: this ignores channel closed errors, which is fine because the substream
                     // might have been closed/dropped
                     inbound_tx.send(data).ok();
-                }
-                SubstreamMessageType::OpenTimeout => {
-                    self.handle_timeout(&msg.substream_id);
-
-                    // TODO return error or just ignore since this is only a timeout for
-                    // opening substreams.
-                    return Poll::Ready(Err(Error::StreamOpenTimeout(msg.substream_id)));
                 }
             }
         }
