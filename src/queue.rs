@@ -108,6 +108,12 @@ mod test {
 
     use super::*;
 
+    impl TransportMessage {
+        fn new(nonce: u64, message: SubstreamMessage, id: ConnectionId) -> Self {
+            TransportMessage { nonce, message, id }
+        }
+    }
+
     #[test]
     fn test_message_queue() {
         let mut queue = MessageQueue::new();
