@@ -78,7 +78,7 @@ pub(crate) struct ConnectionMessage {
 }
 
 /// TransportMessage is sent over a connection after establishment.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct TransportMessage {
     /// increments by 1 for every TransportMessage sent over a connection.
     /// required for ordering, since Nym does not guarantee ordering.
@@ -170,6 +170,10 @@ impl ConnectionMessage {
 }
 
 impl TransportMessage {
+    pub(crate) fn new(nonce: u64, message: SubstreamMessage, id: ConnectionId) -> Self {
+        TransportMessage { nonce, message, id }
+    }
+
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = self.nonce.to_be_bytes().to_vec();
         bytes.extend_from_slice(self.id.0.as_ref());
