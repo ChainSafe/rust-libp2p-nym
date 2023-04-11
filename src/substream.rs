@@ -226,8 +226,8 @@ impl AsyncWrite for Substream {
 mod test {
     use futures::{AsyncReadExt, AsyncWriteExt};
     use nym_sphinx::addressing::clients::Recipient;
-    use std::sync::Arc;
     use std::sync::atomic::AtomicU64;
+    use std::sync::Arc;
     use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
 
     use super::Substream;
