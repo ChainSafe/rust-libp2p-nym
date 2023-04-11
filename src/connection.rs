@@ -386,7 +386,6 @@ mod test {
             connection_id.clone(),
             sender_inbound_rx,
             sender_outbound_tx,
-            None,
         );
         let (recipient_inbound_tx, recipient_inbound_rx) = unbounded_channel::<SubstreamMessage>();
         let mut recipient_connection = Connection::new(
@@ -395,7 +394,6 @@ mod test {
             connection_id.clone(),
             recipient_inbound_rx,
             recipient_outbound_tx,
-            None,
         );
 
         // send the substream OpenRequest to the mixnet
