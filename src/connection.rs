@@ -1,10 +1,12 @@
 use libp2p::core::{muxing::StreamMuxerEvent, PeerId, StreamMuxer};
 use nym_sphinx::addressing::clients::Recipient;
-use parking_lot::Mutex;
 use std::{
     collections::{HashMap, HashSet},
     pin::Pin,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     task::{Context, Poll, Waker},
 };
 use tokio::sync::{
@@ -58,7 +60,7 @@ pub struct Connection {
     close_tx: UnboundedSender<SubstreamId>,
     close_rx: UnboundedReceiver<SubstreamId>,
 
-    pub(crate) message_nonce: Arc<Mutex<u64>>,
+    pub(crate) message_nonce: Arc<AtomicU64>,
 
     waker: Option<Waker>,
 }
@@ -88,19 +90,14 @@ impl Connection {
             inbound_open_rx,
             close_tx,
             close_rx,
-            message_nonce: Arc::new(Mutex::new(0)),
+            message_nonce: Arc::new(AtomicU64::new(0)),
             waker: None,
         }
     }
 
     fn new_outbound_substream(&mut self) -> Result<Substream, Error> {
         let substream_id = SubstreamId::generate();
-
-        let nonce = {
-            let mut nonce = self.message_nonce.lock();
-            *nonce += 1;
-            *nonce
-        };
+        let nonce = self.message_nonce.fetch_add(1, Ordering::SeqCst);
 
         // send the substream open request that requests to open a substream with the given ID
         self.mixnet_outbound_tx
@@ -242,12 +239,7 @@ impl StreamMuxer for Connection {
                 SubstreamMessageType::OpenRequest => {
                     // create a new substream with the given ID
                     let substream = self.new_substream(msg.substream_id.clone())?;
-
-                    let nonce = {
-                        let mut nonce = self.message_nonce.lock();
-                        *nonce += 1;
-                        *nonce
-                    };
+                    let nonce = self.message_nonce.fetch_add(1, Ordering::SeqCst);
 
                     // send the response to the remote peer
                     self.mixnet_outbound_tx
@@ -432,7 +424,7 @@ mod test {
         assert!(sender_connection
             .pending_substreams
             .contains(&sender_substream.substream_id));
-        assert_eq!(*sender_connection.message_nonce.lock(), 1);
+        assert_eq!(sender_connection.message_nonce.load(Ordering::SeqCst), 1);
 
         // poll the recipient inbound stream; should receive the OpenRequest and create the substream
         inbound_receive_and_send(
@@ -443,7 +435,7 @@ mod test {
         )
         .await;
         poll_fn(|cx| Pin::new(&mut recipient_connection).as_mut().poll(cx)).now_or_never();
-        assert_eq!(*recipient_connection.message_nonce.lock(), 1);
+        assert_eq!(recipient_connection.message_nonce.load(Ordering::SeqCst), 1);
 
         // poll recipient's poll_inbound to receive the substream
         let maybe_recipient_substream = poll_fn(|cx| {
@@ -470,7 +462,7 @@ mod test {
         // finally, write message to the substream
         let data = b"hello world";
         sender_substream.write_all(data).await.unwrap();
-        assert_eq!(*sender_connection.message_nonce.lock(), 2);
+        assert_eq!(sender_connection.message_nonce.load(Ordering::SeqCst), 2);
 
         // receive message from the mixnet, push to the recipient Connection inbound channel
         inbound_receive_and_send(
@@ -494,7 +486,7 @@ mod test {
 
         // test closing the stream; assert the stream is closed on both sides
         sender_substream.close().await.unwrap();
-        assert_eq!(*sender_connection.message_nonce.lock(), 3);
+        assert_eq!(sender_connection.message_nonce.load(Ordering::SeqCst), 3);
         inbound_receive_and_send(
             connection_id.clone(),
             &mut recipient_mixnet_inbound_rx,

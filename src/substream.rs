@@ -6,7 +6,10 @@ use nym_sphinx::addressing::clients::Recipient;
 use parking_lot::Mutex;
 use std::{
     pin::Pin,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     task::{Context, Poll},
 };
 use tokio::sync::{
@@ -39,7 +42,7 @@ pub struct Substream {
     // but not yet read by the application.
     unread_data: Mutex<Vec<u8>>,
 
-    message_nonce: Arc<Mutex<u64>>,
+    message_nonce: Arc<AtomicU64>,
 }
 
 impl Substream {
@@ -50,7 +53,7 @@ impl Substream {
         inbound_rx: UnboundedReceiver<Vec<u8>>,
         outbound_tx: UnboundedSender<OutboundMessage>,
         close_rx: Receiver<()>,
-        message_nonce: Arc<Mutex<u64>>,
+        message_nonce: Arc<AtomicU64>,
     ) -> Self {
         Substream {
             remote_recipient,
@@ -156,14 +159,13 @@ impl AsyncWrite for Substream {
             return Poll::Ready(Err(e));
         }
 
-        let mut nonce = self.message_nonce.lock();
-        *nonce += 1;
+        let nonce = self.message_nonce.fetch_add(1, Ordering::SeqCst);
 
         self.outbound_tx
             .send(OutboundMessage {
                 recipient: self.remote_recipient,
                 message: Message::TransportMessage(TransportMessage {
-                    nonce: *nonce,
+                    nonce,
                     id: self.connection_id.clone(),
                     message: SubstreamMessage::new_with_data(
                         self.substream_id.clone(),
@@ -190,8 +192,7 @@ impl AsyncWrite for Substream {
     }
 
     fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), IoError>> {
-        let mut nonce = self.message_nonce.lock();
-        *nonce += 1;
+        let nonce = self.message_nonce.fetch_add(1, Ordering::SeqCst);
 
         let mut closed = self.closed.lock();
         if *closed {
@@ -205,7 +206,7 @@ impl AsyncWrite for Substream {
             .send(OutboundMessage {
                 recipient: self.remote_recipient,
                 message: Message::TransportMessage(TransportMessage {
-                    nonce: *nonce,
+                    nonce,
                     id: self.connection_id.clone(),
                     message: SubstreamMessage::new_close(self.substream_id.clone()),
                 }),
@@ -225,8 +226,8 @@ impl AsyncWrite for Substream {
 mod test {
     use futures::{AsyncReadExt, AsyncWriteExt};
     use nym_sphinx::addressing::clients::Recipient;
-    use parking_lot::Mutex;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
     use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
 
     use super::Substream;
@@ -252,7 +253,7 @@ mod test {
             inbound_rx,
             outbound_tx,
             close_rx,
-            Arc::new(Mutex::new(0)),
+            Arc::new(AtomicU64::new(0)),
         );
 
         // test writing and reading w/ same length data
@@ -332,7 +333,7 @@ mod test {
             inbound_rx,
             outbound_tx,
             close_rx,
-            Arc::new(Mutex::new(0)),
+            Arc::new(AtomicU64::new(0)),
         );
 
         // send message to ourselves over the mixnet
@@ -416,7 +417,7 @@ mod test {
             inbound_rx,
             outbound_tx,
             close_rx,
-            Arc::new(Mutex::new(0)),
+            Arc::new(AtomicU64::new(0)),
         );
 
         // close substream

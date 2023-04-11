@@ -510,6 +510,7 @@ mod test {
         StreamMuxer,
     };
     use std::pin::Pin;
+    use std::sync::atomic::Ordering;
     use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
     use tracing::info;
@@ -517,12 +518,7 @@ mod test {
 
     impl Connection {
         fn write(&self, msg: SubstreamMessage) -> Result<(), Error> {
-            let nonce = {
-                let mut nonce = self.message_nonce.lock();
-                *nonce += 1;
-                *nonce
-            };
-
+            let nonce = self.message_nonce.fetch_add(1, Ordering::SeqCst);
             self.mixnet_outbound_tx
                 .send(OutboundMessage {
                     recipient: self.remote_recipient,
