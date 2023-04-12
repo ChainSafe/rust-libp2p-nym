@@ -50,6 +50,8 @@ pub enum Error {
     InvalidRecipientPrefixByte,
     #[error("failed to decode TransportMessage; too short")]
     TransportMessageBytesTooShort,
+    #[error("failed to decode TransportMessage; invalid nonce")]
+    InvalidNonce,
     #[error("invalid substream ID")]
     InvalidSubstreamMessageBytes,
     #[error("invalid substream message type byte")]

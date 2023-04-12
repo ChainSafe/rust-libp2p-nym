@@ -38,6 +38,7 @@ pub(crate) async fn initialize_mixnet(
 
     // a channel of inbound messages from the mixnet..
     // the transport reads from (listens) to the inbound_rx.
+    // TODO: this is probably a DOS vector; we should limit the size of the channel.
     let (inbound_tx, inbound_rx) = unbounded_channel::<InboundMessage>();
 
     // a channel of outbound messages to be written to the mixnet.
@@ -170,26 +171,26 @@ fn parse_nym_message(msg: Message) -> Result<ServerResponse, Error> {
 
 #[cfg(test)]
 mod test {
-    use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
+    use testcontainers::clients;
 
     use crate::message::{
         self, ConnectionId, Message, SubstreamId, SubstreamMessage, SubstreamMessageType,
         TransportMessage,
     };
     use crate::mixnet::initialize_mixnet;
-    use crate::new_nym_client;
+    use crate::test_utils::create_nym_client;
 
     #[tokio::test]
     async fn test_mixnet_poll_inbound_and_outbound() {
+        let docker_client = clients::Cli::default();
         let nym_id = "test_mixnet_poll_inbound_and_outbound";
-        #[allow(unused)]
-        let uri: String;
-        new_nym_client!(nym_id, uri);
+        let (_container1, uri) = create_nym_client(&docker_client, nym_id);
         let (self_address, mut inbound_rx, outbound_tx) =
             initialize_mixnet(&uri, None).await.unwrap();
         let msg_inner = "hello".as_bytes();
         let substream_id = SubstreamId::generate();
         let msg = Message::TransportMessage(TransportMessage {
+            nonce: 1, // arbitrary
             id: ConnectionId::generate(),
             message: SubstreamMessage::new_with_data(substream_id.clone(), msg_inner.to_vec()),
         });
