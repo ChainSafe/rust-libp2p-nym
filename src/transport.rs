@@ -424,12 +424,11 @@ impl Transport for NymTransport {
         .boxed())
     }
 
-    // dial_as_listener is unsupported.
+    // dial_as_listener currently just calls self.dial().
     fn dial_as_listener(
         &mut self,
         addr: Multiaddr,
     ) -> Result<Self::Dial, TransportError<Self::Error>> {
-        // Err(TransportError::Other(Error::Unimplemented))
         self.dial(addr)
     }
 
