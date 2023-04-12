@@ -229,7 +229,7 @@ mod test {
 
     use std::sync::atomic::AtomicU64;
     use std::sync::Arc;
-    use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
+    use testcontainers::clients;
 
     use super::Substream;
     use crate::message::{ConnectionId, Message, SubstreamId, SubstreamMessage, TransportMessage};
