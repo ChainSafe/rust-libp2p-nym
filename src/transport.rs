@@ -511,7 +511,7 @@ mod test {
     };
     use std::pin::Pin;
     use std::sync::atomic::Ordering;
-    use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
+    use testcontainers::clients;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
     use tracing::info;
     use tracing_subscriber::EnvFilter;
