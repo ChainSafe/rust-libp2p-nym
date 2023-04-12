@@ -352,12 +352,12 @@ impl PendingConnection {
 mod test {
     use futures::future::poll_fn;
     use futures::{AsyncReadExt, AsyncWriteExt, FutureExt};
-    use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
+    use testcontainers::clients;
 
     use super::*;
     use crate::message::InboundMessage;
     use crate::mixnet::initialize_mixnet;
-    use crate::new_nym_client;
+    use crate::test_utils::create_nym_client;
 
     async fn inbound_receive_and_send(
         connection_id: ConnectionId,
@@ -382,17 +382,14 @@ mod test {
 
     #[tokio::test]
     async fn test_connection_stream_muxer() {
+        let docker_client = clients::Cli::default();
         let nym_id = "test_connection_stream_muxer_sender";
-        #[allow(unused)]
-        let sender_uri: String;
-        new_nym_client!(nym_id, sender_uri);
+        let (_container1, sender_uri) = create_nym_client(&docker_client, nym_id);
         let (sender_address, mut sender_mixnet_inbound_rx, sender_outbound_tx) =
             initialize_mixnet(&sender_uri, None).await.unwrap();
 
         let nym_id = "test_connection_stream_muxer_recipient";
-        #[allow(unused)]
-        let recipient_uri: String;
-        new_nym_client!(nym_id, recipient_uri);
+        let (_container2, recipient_uri) = create_nym_client(&docker_client, nym_id);
         let (recipient_address, mut recipient_mixnet_inbound_rx, recipient_outbound_tx) =
             initialize_mixnet(&recipient_uri, None).await.unwrap();
 

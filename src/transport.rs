@@ -499,8 +499,8 @@ mod test {
         Message, OutboundMessage, SubstreamId, SubstreamMessage, SubstreamMessageType,
         TransportMessage,
     };
-    use crate::new_nym_client;
     use crate::substream::Substream;
+    use crate::test_utils::create_nym_client;
 
     use super::{nym_address_to_multiaddress, NymTransport};
     use futures::{future::poll_fn, AsyncReadExt, AsyncWriteExt, FutureExt};
@@ -551,10 +551,9 @@ mod test {
             )
             .init();
 
+        let docker_client = clients::Cli::default();
         let nym_id = "test_transport_connection_dialer";
-        #[allow(unused)]
-        let dialer_uri: String;
-        new_nym_client!(nym_id, dialer_uri);
+        let (_container1, dialer_uri) = create_nym_client(&docker_client, nym_id);
         let (dialer_notify_inbound_tx, mut dialer_notify_inbound_rx) = unbounded_channel();
         let mut dialer_transport =
             NymTransport::new_with_notify_inbound(&dialer_uri, dialer_notify_inbound_tx)
@@ -562,9 +561,7 @@ mod test {
                 .unwrap();
 
         let nym_id = "test_transport_connection_listener";
-        #[allow(unused)]
-        let listener_uri: String;
-        new_nym_client!(nym_id, listener_uri);
+        let (_container2, listener_uri) = create_nym_client(&docker_client, nym_id);
         let (listener_notify_inbound_tx, mut listener_notify_inbound_rx) = unbounded_channel();
         let mut listener_transport =
             NymTransport::new_with_notify_inbound(&listener_uri, listener_notify_inbound_tx)
@@ -692,10 +689,9 @@ mod test {
 
     #[tokio::test]
     async fn test_transport_substream() {
+        let docker_client = clients::Cli::default();
         let nym_id = "test_transport_substream_dialer";
-        #[allow(unused)]
-        let dialer_uri: String;
-        new_nym_client!(nym_id, dialer_uri);
+        let (_container, dialer_uri) = create_nym_client(&docker_client, nym_id);
         let (dialer_notify_inbound_tx, mut dialer_notify_inbound_rx) = unbounded_channel();
         let mut dialer_transport =
             NymTransport::new_with_notify_inbound(&dialer_uri, dialer_notify_inbound_tx)
@@ -703,9 +699,7 @@ mod test {
                 .unwrap();
 
         let nym_id = "test_transport_substream_listener";
-        #[allow(unused)]
-        let listener_uri: String;
-        new_nym_client!(nym_id, listener_uri);
+        let (_container1, listener_uri) = create_nym_client(&docker_client, nym_id);
         let (listener_notify_inbound_tx, mut listener_notify_inbound_rx) = unbounded_channel();
         let mut listener_transport =
             NymTransport::new_with_notify_inbound(&listener_uri, listener_notify_inbound_tx)

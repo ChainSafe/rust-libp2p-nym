@@ -226,6 +226,7 @@ impl AsyncWrite for Substream {
 mod test {
     use futures::{AsyncReadExt, AsyncWriteExt};
     use nym_sphinx::addressing::clients::Recipient;
+
     use std::sync::atomic::AtomicU64;
     use std::sync::Arc;
     use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
@@ -233,7 +234,7 @@ mod test {
     use super::Substream;
     use crate::message::{ConnectionId, Message, SubstreamId, SubstreamMessage, TransportMessage};
     use crate::mixnet::initialize_mixnet;
-    use crate::new_nym_client;
+    use crate::test_utils::create_nym_client;
 
     #[tokio::test]
     async fn test_substream_poll_read_unread_data() {
@@ -312,10 +313,9 @@ mod test {
 
     #[tokio::test]
     async fn test_substream_read_write() {
+        let docker_client = clients::Cli::default();
         let nym_id = "test_substream_read_write";
-        #[allow(unused)]
-        let uri: String;
-        new_nym_client!(nym_id, uri);
+        let (_container, uri) = create_nym_client(&docker_client, nym_id);
         let (self_address, mut mixnet_inbound_rx, outbound_tx) =
             initialize_mixnet(&uri, None).await.unwrap();
 
@@ -397,10 +397,9 @@ mod test {
 
     #[tokio::test]
     async fn test_substream_recv_close() {
+        let docker_client = clients::Cli::default();
         let nym_id = "test_substream_recv_close";
-        #[allow(unused)]
-        let uri: String;
-        new_nym_client!(nym_id, uri);
+        let (_container1, uri) = create_nym_client(&docker_client, nym_id);
         let (self_address, _, outbound_tx) = initialize_mixnet(&uri, None).await.unwrap();
 
         const MSG_INNER: &[u8] = "hello".as_bytes();
