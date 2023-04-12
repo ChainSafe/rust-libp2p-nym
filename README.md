@@ -4,17 +4,25 @@ This repo contains an implementation of a libp2p transport using the Nym mixnet.
 
 ## Tests
 
-Install `protoc`. On Ubuntu/Debian, run: `sudo apt-get install protobuf-compiler`.
+Install `protoc`. On Ubuntu/Debian, run: `sudo apt-get install
+protobuf-compiler`.
 
-Ensure that docker is installed on the machine where the tests need to be run.
+Ensure that docker is installed on the machine where the tests need to
+be run.
 
 Then, run the following as usual.
+
 ```
 DOCKER_BUILD=1 cargo test
 ```
 
-Note that if you've already built the docker image and want to avoid this step,
-you can ignore the `DOCKER_BUILD` environment variable.
+### Notes on Docker
+
+* If you've already built the docker image and want to avoid this step,
+  you can ignore the `DOCKER_BUILD` environment variable.
+* The Docker image is a *local* image and we are not pushing this
+  anywhere. The tag is reflective of the version of the binaries that
+  we are downloading from github releases for the nym client
 
 ## Ping example
 
@@ -41,6 +49,18 @@ You should see that the nodes connected and pinged each other:
 # Mar 30 22:56:35.595  INFO ping: BehaviourEvent: Event { peer: PeerId("12D3KooWMd5ak31DXuZq7x1JuFSR6toA5RDQrPaHrfXEhy7vqqpC"), result: Ok(Pong) }
 ```
 
+In order to run the ping example with vanilla libp2p, which uses tcp, pass the
+`--features vanilla` flag to the example and follow the instructions on the
+rust-libp2p project as usual.
+
+```bash
+RUST_LOG=ping=debug cargo run --examples ping --feature vanilla
+```
+
+```bash
+RUST_LOG=ping=debug cargo run --examples ping --feature vanilla -- "/ip4/127.0.0.1/tcp/$PORT"
+```
+
 ### Writing New Tests
 
 In order to abstract away the `nym-client` instantiation, we rely on the
@@ -53,19 +73,12 @@ In order to create a single service, developers can use the following code
 snippet.
 
 ```rust
-#[cfg(test)]
-mod test {
-    use crate::new_nym_client;
-    #[tokio::test]
-    async fn test_with_nym() {
-
-        let nym_id = "test_transport_connection_dialer";
-        #[allow(unused)]
-        let dialer_uri: String;
-        new_nym_client!(nym_id, dialer_uri);
-        todo!("Now you can use the dialer_uri to make requests.")
-    }
-}
+let dialer_uri: String = Default::default();
+rust_libp2p_nym::new_nym_client!(nym_id, dialer_uri);
 ```
 
 One can create as many of these as needed, limited only by the server resources.
+
+For more usage patterns, look at `src/transport.rs`. Note that if the code terminates
+in a non-clean way, you might have to kill the running docker containers
+manually using `docker rm -f $ID".

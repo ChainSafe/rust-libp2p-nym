@@ -40,43 +40,65 @@
 //! The two nodes establish a connection, negotiate the ping protocol
 //! and begin pinging each other.
 
-use libp2p::core::{muxing::StreamMuxerBox, transport::Transport};
 use libp2p::futures::StreamExt;
-use libp2p::swarm::{keep_alive, NetworkBehaviour, SwarmBuilder, SwarmEvent};
+use libp2p::ping::Success;
+use libp2p::swarm::{keep_alive, NetworkBehaviour, SwarmEvent};
 use libp2p::{identity, ping, Multiaddr, PeerId};
-use rust_libp2p_nym::{new_nym_client, transport::NymTransport};
+
+use rust_libp2p_nym::test_utils::create_nym_client;
 use std::error::Error;
-use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
-use tracing::info;
+use std::time::Duration;
+use testcontainers::clients;
+use tracing::{debug, info};
+
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("ping=debug,rust_libp2p_nym=debug")),
         )
         .init();
-
-    let nym_id = rand::random::<u64>().to_string();
-    #[allow(unused)]
-    let dialer_uri: String = Default::default();
-    new_nym_client!(nym_id, dialer_uri);
 
     let local_key = identity::Keypair::generate_ed25519();
     let local_peer_id = PeerId::from(local_key.public());
     info!("Local peer id: {local_peer_id:?}");
+    #[cfg(not(feature = "vanilla"))]
+    let nym_id = rand::random::<u64>().to_string();
 
-    let transport = NymTransport::new(&dialer_uri, local_key).await?;
+    let docker_client = clients::Cli::default();
+    let (_nym_container, dialer_uri) = create_nym_client(&docker_client, &nym_id);
+    info!("dialer_uri: {}", dialer_uri);
 
-    let mut swarm = SwarmBuilder::with_tokio_executor(
-        transport
-            .map(|a, _| (a.0, StreamMuxerBox::new(a.1)))
-            .boxed(),
-        Behaviour::default(),
-        local_peer_id,
-    )
-    .build();
+    #[cfg(not(feature = "vanilla"))]
+    let mut swarm = {
+        debug!("Running `ping` example using NymTransport");
+        use libp2p::core::{muxing::StreamMuxerBox, transport::Transport};
+        use libp2p::swarm::SwarmBuilder;
+        use rust_libp2p_nym::transport::NymTransport;
+
+        let transport = NymTransport::new(&dialer_uri, local_key.clone()).await?;
+        SwarmBuilder::with_tokio_executor(
+            transport
+                .map(|a, _| (a.0, StreamMuxerBox::new(a.1)))
+                .boxed(),
+            Behaviour::default(),
+            local_peer_id,
+        )
+        .build()
+    };
+
+    #[cfg(feature = "vanilla")]
+    let mut swarm = {
+        debug!("Running `ping` example using the vanilla libp2p tokio_development_transport");
+        let transport = libp2p::tokio_development_transport(local_key)?;
+        let mut swarm =
+            libp2p::Swarm::with_tokio_executor(transport, Behaviour::default(), local_peer_id);
+        swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
+        swarm
+    };
 
     // Dial the peer identified by the multi-address given as the second
     // command-line argument, if any.
@@ -86,10 +108,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
         info!("Dialed {addr}")
     }
 
+    let mut total_ping_rtt: Duration = Duration::from_micros(0);
+    let mut counter: u128 = 0;
     loop {
         match swarm.select_next_some().await {
             SwarmEvent::NewListenAddr { address, .. } => info!("Listening on {address:?}"),
-            SwarmEvent::Behaviour(event) => info!("{event:?}"),
+            SwarmEvent::Behaviour(event) => {
+                // Get the round-trip duration for the pings.
+                // This value is already captured in the BehaviourEvent::Ping's `Success::Ping`
+                // field.
+                debug!("{event:?}");
+                if let BehaviourEvent::Ping(ping_event) = event {
+                    let result: Success = ping_event.result?;
+                    match result {
+                        Success::Ping { rtt } => {
+                            counter += 1;
+                            total_ping_rtt += rtt;
+                            let average_ping_rtt = Duration::from_micros(
+                                (total_ping_rtt.as_micros() / counter).try_into().unwrap(),
+                            );
+                            info!("Ping RTT: {rtt:?} AVERAGE RTT: ({counter} pings): {average_ping_rtt:?}");
+                        }
+                        Success::Pong => info!("Pong Event"),
+                    }
+                }
+            }
             _ => {}
         }
     }
