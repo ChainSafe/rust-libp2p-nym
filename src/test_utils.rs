@@ -11,7 +11,7 @@ pub fn create_nym_client<'a>(
     nym_id: &str,
 ) -> (Container<'a, GenericImage>, String) {
     let nym_ready_message = WaitFor::message_on_stderr("Client startup finished!");
-    let nym_image = GenericImage::new("nym", "latest")
+    let nym_image = GenericImage::new("chainsafe/nym", "1.1.12")
         .with_env_var("NYM_ID", nym_id)
         .with_wait_for(nym_ready_message)
         .with_exposed_port(1977);
@@ -19,5 +19,4 @@ pub fn create_nym_client<'a>(
     let nym_port = nym_container.get_host_port_ipv4(1977);
     let nym_uri = format!("ws://0.0.0.0:{nym_port}");
     (nym_container, nym_uri)
-
 }
