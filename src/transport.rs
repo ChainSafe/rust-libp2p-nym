@@ -26,6 +26,7 @@ use crate::message::{
     TransportMessage,
 };
 use crate::mixnet::initialize_mixnet;
+use crate::queue::MessageQueue;
 
 /// InboundTransportEvent represents an inbound event from the mixnet.
 pub enum InboundTransportEvent {
@@ -50,6 +51,9 @@ pub struct NymTransport {
 
     /// outbound pending dials
     pending_dials: HashMap<ConnectionId, PendingConnection>,
+
+    /// connection message queues
+    message_queues: HashMap<ConnectionId, MessageQueue>,
 
     /// inbound mixnet messages
     inbound_stream: UnboundedReceiverStream<InboundMessage>,
@@ -99,6 +103,7 @@ impl NymTransport {
             keypair,
             connections: HashMap::new(),
             pending_dials: HashMap::new(),
+            message_queues: HashMap::new(),
             inbound_stream,
             outbound_tx,
             poll_rx,
@@ -111,6 +116,45 @@ impl NymTransport {
         PeerId::from_public_key(&self.keypair.public())
     }
 
+    fn handle_message_queue_on_connection_initiation(
+        &mut self,
+        id: &ConnectionId,
+    ) -> Result<(), Error> {
+        debug!("handle_message_queue_on_connection_initiation");
+        let Some(inbound_tx) = self.connections.get(id) else {
+            // this should not happen
+            return Err(Error::NoConnectionForTransportMessage);
+        };
+
+        match self.message_queues.get_mut(id) {
+            Some(queue) => {
+                // update expected nonce
+                queue.set_connection_message_received();
+
+                // push pending inbound some messages in this case
+                while let Some(msg) = queue.pop() {
+                    debug!(
+                        "popped queued message with nonce {} for connection",
+                        msg.nonce
+                    );
+                    inbound_tx
+                        .send(msg.message.clone())
+                        .map_err(|e| Error::InboundSendError(e.to_string()))?;
+                }
+            }
+            None => {
+                // no queue exists for this connection, create one
+                let queue = MessageQueue::new();
+                self.message_queues.insert(id.clone(), queue);
+                let queue = self.message_queues.get_mut(id).unwrap();
+                queue.set_connection_message_received();
+            }
+        };
+
+        debug!("returning from handle_message_queue_on_connection_initiation");
+        Ok(())
+    }
+
     // handle_connection_response resolves the pending connection corresponding to the response
     // (if there is one) into a Connection.
     fn handle_connection_response(&mut self, msg: &ConnectionMessage) -> Result<(), Error> {
@@ -120,17 +164,19 @@ impl NymTransport {
 
         if let Some(pending_conn) = self.pending_dials.remove(&msg.id) {
             // resolve connection and put into pending_conn channel
-            let (conn, inner_conn) = self.create_connection_types(
+            let (conn, conn_tx) = self.create_connection_types(
                 msg.peer_id,
                 pending_conn.remote_recipient,
                 msg.id.clone(),
             );
 
+            self.connections.insert(msg.id.clone(), conn_tx);
+            self.handle_message_queue_on_connection_initiation(&msg.id)?;
+
             pending_conn
                 .connection_tx
                 .send(conn)
                 .map_err(|_| Error::ConnectionSendError)?;
-            self.connections.insert(msg.id.clone(), inner_conn);
 
             if let Some(waker) = self.waker.take() {
                 waker.wake();
@@ -154,8 +200,11 @@ impl NymTransport {
             return Err(Error::ConnectionIDExists);
         }
 
-        let (conn, inner_conn) =
+        let (conn, conn_tx) =
             self.create_connection_types(msg.peer_id, msg.recipient.unwrap(), msg.id.clone());
+        self.connections.insert(msg.id.clone(), conn_tx);
+        self.handle_message_queue_on_connection_initiation(&msg.id)?;
+
         let resp = ConnectionMessage {
             peer_id: self.peer_id(),
             recipient: None,
@@ -169,8 +218,6 @@ impl NymTransport {
             })
             .map_err(|e| Error::OutboundSendError(e.to_string()))?;
 
-        self.connections.insert(msg.id.clone(), inner_conn);
-
         if let Some(waker) = self.waker.take() {
             waker.wake();
         }
@@ -178,20 +225,55 @@ impl NymTransport {
         Ok(conn)
     }
 
-    fn handle_transport_message(&self, msg: &TransportMessage) -> Result<(), Error> {
-        if let Some(inbound_tx) = self.connections.get(&msg.id) {
+    fn handle_transport_message(&mut self, msg: TransportMessage) -> Result<(), Error> {
+        let queue = match self.message_queues.get_mut(&msg.id) {
+            Some(queue) => queue,
+            None => {
+                // no queue exists for this connection, create one
+                let queue = MessageQueue::new();
+                self.message_queues.insert(msg.id.clone(), queue);
+                self.message_queues.get_mut(&msg.id).unwrap()
+            }
+        };
+
+        queue.print_nonces();
+
+        let nonce = msg.nonce;
+        let Some(msg) = queue.try_push(msg) else {
+            // don't push the message yet, it's been queued
+            debug!("message with nonce {} queued for connection", nonce);
+            return Ok(());
+        };
+
+        let Some(inbound_tx) = self.connections.get(&msg.id) else {
+            return Err(Error::NoConnectionForTransportMessage);
+        };
+
+        // send original message
+        debug!(
+            "sending original message with nonce {} for connection",
+            nonce
+        );
+        inbound_tx
+            .send(msg.message.clone())
+            .map_err(|e| Error::InboundSendError(e.to_string()))?;
+
+        // try to pop queued messages and send them on inbound channel
+        while let Some(msg) = queue.pop() {
+            debug!(
+                "popped queued message with nonce {} for connection",
+                msg.nonce
+            );
             inbound_tx
                 .send(msg.message.clone())
                 .map_err(|e| Error::InboundSendError(e.to_string()))?;
-
-            if let Some(waker) = self.waker.clone().take() {
-                waker.wake();
-            }
-
-            Ok(())
-        } else {
-            Err(Error::NoConnectionForTransportMessage)
         }
+
+        if let Some(waker) = self.waker.clone().take() {
+            waker.wake();
+        }
+
+        Ok(())
     }
 
     fn create_connection_types(
@@ -240,7 +322,7 @@ impl NymTransport {
             }
             Message::TransportMessage(msg) => {
                 debug!("got inbound TransportMessage: {:?}", msg);
-                self.handle_transport_message(&msg)
+                self.handle_transport_message(msg)
                     .map(|_| InboundTransportEvent::TransportMessage)
             }
         }
@@ -428,6 +510,7 @@ mod test {
         StreamMuxer,
     };
     use std::pin::Pin;
+    use std::sync::atomic::Ordering;
     use testcontainers::clients;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
     use tracing::info;
@@ -435,10 +518,12 @@ mod test {
 
     impl Connection {
         fn write(&self, msg: SubstreamMessage) -> Result<(), Error> {
+            let nonce = self.message_nonce.fetch_add(1, Ordering::SeqCst);
             self.mixnet_outbound_tx
                 .send(OutboundMessage {
                     recipient: self.remote_recipient,
                     message: Message::TransportMessage(TransportMessage {
+                        nonce,
                         id: self.id.clone(),
                         message: msg,
                     }),

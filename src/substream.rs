@@ -6,6 +6,10 @@ use nym_sphinx::addressing::clients::Recipient;
 use parking_lot::Mutex;
 use std::{
     pin::Pin,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     task::{Context, Poll},
 };
 use tokio::sync::{
@@ -37,6 +41,8 @@ pub struct Substream {
     // buffer of data that's been written to the stream,
     // but not yet read by the application.
     unread_data: Mutex<Vec<u8>>,
+
+    message_nonce: Arc<AtomicU64>,
 }
 
 impl Substream {
@@ -47,6 +53,7 @@ impl Substream {
         inbound_rx: UnboundedReceiver<Vec<u8>>,
         outbound_tx: UnboundedSender<OutboundMessage>,
         close_rx: Receiver<()>,
+        message_nonce: Arc<AtomicU64>,
     ) -> Self {
         Substream {
             remote_recipient,
@@ -57,6 +64,7 @@ impl Substream {
             close_rx,
             closed: Mutex::new(false),
             unread_data: Mutex::new(vec![]),
+            message_nonce,
         }
     }
 
@@ -151,10 +159,13 @@ impl AsyncWrite for Substream {
             return Poll::Ready(Err(e));
         }
 
+        let nonce = self.message_nonce.fetch_add(1, Ordering::SeqCst);
+
         self.outbound_tx
             .send(OutboundMessage {
                 recipient: self.remote_recipient,
                 message: Message::TransportMessage(TransportMessage {
+                    nonce,
                     id: self.connection_id.clone(),
                     message: SubstreamMessage::new_with_data(
                         self.substream_id.clone(),
@@ -181,6 +192,8 @@ impl AsyncWrite for Substream {
     }
 
     fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), IoError>> {
+        let nonce = self.message_nonce.fetch_add(1, Ordering::SeqCst);
+
         let mut closed = self.closed.lock();
         if *closed {
             return Poll::Ready(Err(IoError::new(ErrorKind::Other, "stream closed")));
@@ -193,6 +206,7 @@ impl AsyncWrite for Substream {
             .send(OutboundMessage {
                 recipient: self.remote_recipient,
                 message: Message::TransportMessage(TransportMessage {
+                    nonce,
                     id: self.connection_id.clone(),
                     message: SubstreamMessage::new_close(self.substream_id.clone()),
                 }),
@@ -212,6 +226,8 @@ impl AsyncWrite for Substream {
 mod test {
     use futures::{AsyncReadExt, AsyncWriteExt};
     use nym_sphinx::addressing::clients::Recipient;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::Arc;
     use testcontainers::clients;
 
     use super::Substream;
@@ -237,6 +253,7 @@ mod test {
             inbound_rx,
             outbound_tx,
             close_rx,
+            Arc::new(AtomicU64::new(1)),
         );
 
         // test writing and reading w/ same length data
@@ -315,6 +332,7 @@ mod test {
             inbound_rx,
             outbound_tx,
             close_rx,
+            Arc::new(AtomicU64::new(1)),
         );
 
         // send message to ourselves over the mixnet
@@ -324,6 +342,7 @@ mod test {
         let recv_msg = mixnet_inbound_rx.recv().await.unwrap();
         match recv_msg.0 {
             Message::TransportMessage(TransportMessage {
+                nonce,
                 id: _,
                 message:
                     SubstreamMessage {
@@ -331,6 +350,7 @@ mod test {
                         message_type: msg,
                     },
             }) => {
+                assert_eq!(nonce, 1);
                 match msg {
                     crate::message::SubstreamMessageType::Data(data) => {
                         assert_eq!(data, MSG_INNER);
@@ -359,6 +379,7 @@ mod test {
         let recv_msg = mixnet_inbound_rx.recv().await.unwrap();
         match recv_msg.0 {
             Message::TransportMessage(TransportMessage {
+                nonce: _,
                 id: _,
                 message:
                     SubstreamMessage {
@@ -369,7 +390,7 @@ mod test {
                 crate::message::SubstreamMessageType::Close => {}
                 _ => panic!("unexpected message type"),
             },
-            _ => panic!("unexpected message"),
+            _ => panic!("unexpected message: {:?}", recv_msg.0),
         }
     }
 
@@ -394,6 +415,7 @@ mod test {
             inbound_rx,
             outbound_tx,
             close_rx,
+            Arc::new(AtomicU64::new(1)),
         );
 
         // close substream

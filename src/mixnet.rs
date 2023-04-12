@@ -38,6 +38,7 @@ pub(crate) async fn initialize_mixnet(
 
     // a channel of inbound messages from the mixnet..
     // the transport reads from (listens) to the inbound_rx.
+    // TODO: this is probably a DOS vector; we should limit the size of the channel.
     let (inbound_tx, inbound_rx) = unbounded_channel::<InboundMessage>();
 
     // a channel of outbound messages to be written to the mixnet.
@@ -189,6 +190,7 @@ mod test {
         let msg_inner = "hello".as_bytes();
         let substream_id = SubstreamId::generate();
         let msg = Message::TransportMessage(TransportMessage {
+            nonce: 1, // arbitrary
             id: ConnectionId::generate(),
             message: SubstreamMessage::new_with_data(substream_id.clone(), msg_inner.to_vec()),
         });
