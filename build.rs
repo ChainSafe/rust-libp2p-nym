@@ -2,11 +2,15 @@ use std::env;
 use std::process::Command;
 
 fn main() {
+    // NOTE: This builds the Docker container *locally*,
+    // and is not pulling the image from anywhere publically.
+    let docker_image = "chainsafe/nym:1.1.12";
+
     if env::var("DOCKER_BUILD").is_ok() {
         let output = Command::new("docker")
             .arg("build")
             .arg("-t")
-            .arg("nym:latest")
+            .arg(docker_image)
             .arg("-f")
             .arg("./Dockerfile.nym")
             .arg(".")
