@@ -44,11 +44,13 @@ use libp2p::futures::StreamExt;
 use libp2p::ping::Success;
 use libp2p::swarm::{keep_alive, NetworkBehaviour, SwarmEvent};
 use libp2p::{identity, ping, Multiaddr, PeerId};
+
+use rust_libp2p_nym::test_utils::create_nym_client;
 use std::error::Error;
 use std::time::Duration;
-#[cfg(not(feature = "vanilla"))]
-use testcontainers::{clients, core::WaitFor, images::generic::GenericImage};
+use testcontainers::clients;
 use tracing::{debug, info};
+
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -65,13 +67,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     info!("Local peer id: {local_peer_id:?}");
     #[cfg(not(feature = "vanilla"))]
     let nym_id = rand::random::<u64>().to_string();
-    #[allow(unused)]
-    #[cfg(not(feature = "vanilla"))]
-    let dialer_uri: String = Default::default();
-    #[cfg(not(feature = "vanilla"))]
-    rust_libp2p_nym::new_nym_client!(nym_id, dialer_uri);
-    #[cfg(not(feature = "vanilla"))]
-    debug!("Launched nym client using docker.");
+
+    let docker_client = clients::Cli::default();
+    let (_nym_container, dialer_uri) = create_nym_client(&docker_client, &nym_id);
+    info!("dialer_uri: {}", dialer_uri);
 
     #[cfg(not(feature = "vanilla"))]
     let mut swarm = {
