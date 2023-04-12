@@ -4,17 +4,25 @@ This repo contains an implementation of a libp2p transport using the Nym mixnet.
 
 ## Tests
 
-Install `protoc`. On Ubuntu/Debian, run: `sudo apt-get install protobuf-compiler`.
+Install `protoc`. On Ubuntu/Debian, run: `sudo apt-get install
+protobuf-compiler`.
 
-Ensure that docker is installed on the machine where the tests need to be run.
+Ensure that docker is installed on the machine where the tests need to
+be run.
 
 Then, run the following as usual.
+
 ```
 DOCKER_BUILD=1 cargo test
 ```
 
-Note that if you've already built the docker image and want to avoid this step,
-you can ignore the `DOCKER_BUILD` environment variable.
+### Notes on Docker
+
+* If you've already built the docker image and want to avoid this step,
+  you can ignore the `DOCKER_BUILD` environment variable.
+* The Docker image is a *local* image and we are not pushing this
+  anywhere. The tag is reflective of the version of the binaries that
+  we are downloading from github releases for the nym client
 
 ## Ping example
 
