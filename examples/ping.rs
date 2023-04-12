@@ -45,10 +45,11 @@ use libp2p::ping::Success;
 use libp2p::swarm::{keep_alive, NetworkBehaviour, SwarmEvent};
 use libp2p::{identity, ping, Multiaddr, PeerId};
 
-use rust_libp2p_nym::{test_utils::create_nym_client, transport::NymTransport};
+use rust_libp2p_nym::test_utils::create_nym_client;
 use std::error::Error;
+use std::time::Duration;
 use testcontainers::clients;
-use tracing::info;
+use tracing::{debug, info};
 
 use tracing_subscriber::EnvFilter;
 
@@ -70,7 +71,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let docker_client = clients::Cli::default();
     let (_nym_container, dialer_uri) = create_nym_client(&docker_client, &nym_id);
     info!("dialer_uri: {}", dialer_uri);
-
 
     #[cfg(not(feature = "vanilla"))]
     let mut swarm = {
