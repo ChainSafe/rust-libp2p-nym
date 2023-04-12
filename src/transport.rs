@@ -889,16 +889,15 @@ mod test {
                 .with_timeout(std::time::Duration::from_millis(100));
 
         // mock a transport that will never resolve the connection.
-        let empty_addr = Multiaddr::from_str(&format!(
+        let empty_addr = Multiaddr::from_str(
             "/nym/Hmer6Ndt3PV13YW53HM8ri4NvqqtfDQUQBhzvKqb1dag.2g478dyxtrQXGWc1Mk2VEqdPcWXpz7EhAcjhdAJtVZdA@AnnYnEtBjB2a5sHmeRCnBq43qxyHDf95Bqd7cwQyKNLR"
-        ))
+        )
         .expect("unable to parse multiaddress");
 
         let dial = dialer_transport.dial(empty_addr).unwrap();
         assert!(dial
             .await
-            .err()
-            .expect("should have timed out")
+            .expect_err("should have timed out")
             .to_string()
             .contains("dial timed out"));
     }
