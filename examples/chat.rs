@@ -48,8 +48,7 @@
 use futures::{prelude::*, select};
 use libp2p::{
     core::muxing::StreamMuxerBox,
-    gossipsub, identity, mdns, ping,
-    swarm::keep_alive,
+    gossipsub, identity,
     swarm::NetworkBehaviour,
     swarm::{SwarmBuilder, SwarmEvent},
     PeerId, Transport,
@@ -61,8 +60,6 @@ use std::error::Error;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 use testcontainers::clients;
-use testcontainers::core::WaitFor;
-use testcontainers::images::generic::GenericImage;
 use tokio::io;
 use tokio_util::codec;
 use tracing::info;
@@ -72,9 +69,6 @@ use tracing_subscriber::EnvFilter;
 #[derive(NetworkBehaviour)]
 struct Behaviour {
     gossipsub: gossipsub::Behaviour,
-    //mdns: mdns::tokio::Behaviour,
-    //keep_alive: keep_alive::Behaviour,
-    //ping: ping::Behaviour,
 }
 use libp2p::Multiaddr;
 
@@ -118,7 +112,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let nym_id = rand::random::<u64>().to_string();
     let docker_client = clients::Cli::default();
-    let dialer_uri: String;
     let (_nym_container, dialer_uri) = create_nym_client(&docker_client, &nym_id);
     info!("dialer_uri: {}", dialer_uri);
 
@@ -127,18 +120,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     info!("Local peer id: {local_peer_id:?}");
 
     let transport = NymTransport::new(&dialer_uri, local_key).await?;
-    let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?;
 
     let mut swarm = SwarmBuilder::with_tokio_executor(
         transport
             .map(|a, _| (a.0, StreamMuxerBox::new(a.1)))
             .boxed(),
-        Behaviour {
-            gossipsub,
-            //mdns,
-            //keep_alive: keep_alive::Behaviour::default(),
-            //ping: ping::Behaviour::default(),
-        },
+        Behaviour { gossipsub },
         local_peer_id,
     )
     .build();
@@ -149,12 +136,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         info!("Dialed {addr}")
     }
 
-    println!("swarm has been built");
-
     // Read full lines from stdin
     let mut stdin = codec::FramedRead::new(io::stdin(), codec::LinesCodec::new()).fuse();
-
-    //swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
     println!("Enter messages via STDIN and they will be sent to connected peers using Gossipsub");
 
@@ -169,22 +152,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
             },
             event = swarm.select_next_some() => {
-                println!("The event is: {:?}", event);
                 match event {
-                    /*
-                    SwarmEvent::Behaviour(BehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
-                        for (peer_id, _multiaddr) in list {
-                            println!("mDNS discovered a new peer: {peer_id}");
-                            swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
-                        }
-                    },
-                    SwarmEvent::Behaviour(BehaviourEvent::Mdns(mdns::Event::Expired(list))) => {
-                        for (peer_id, _multiaddr) in list {
-                            println!("mDNS discover peer has expired: {peer_id}");
-                            swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer_id);
-                        }
-                    },
-                    */
                     SwarmEvent::Behaviour(BehaviourEvent::Gossipsub(gossipsub::Event::Message {
                         propagation_source: peer_id,
                         message_id: id,
