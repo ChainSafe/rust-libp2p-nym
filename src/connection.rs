@@ -90,7 +90,7 @@ impl Connection {
             inbound_open_rx,
             close_tx,
             close_rx,
-            message_nonce: Arc::new(AtomicU64::new(0)),
+            message_nonce: Arc::new(AtomicU64::new(1)),
             waker: None,
         }
     }

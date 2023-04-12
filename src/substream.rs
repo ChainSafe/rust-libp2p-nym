@@ -253,7 +253,7 @@ mod test {
             inbound_rx,
             outbound_tx,
             close_rx,
-            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(1)),
         );
 
         // test writing and reading w/ same length data
@@ -332,7 +332,7 @@ mod test {
             inbound_rx,
             outbound_tx,
             close_rx,
-            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(1)),
         );
 
         // send message to ourselves over the mixnet
@@ -415,7 +415,7 @@ mod test {
             inbound_rx,
             outbound_tx,
             close_rx,
-            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(1)),
         );
 
         // close substream
