@@ -220,9 +220,6 @@ impl StreamMuxer for Connection {
                         .map_err(|e| Error::OutboundSendError(e.to_string()))?;
                     debug!("wrote OpenResponse for substream: {:?}", &msg.substream_id);
 
-                    // // check if we have any pending inbound data for this substream and send it if so
-                    // self.send_pending_inbound_data_to_substream(&msg.substream_id)?;
-
                     // send the substream to our own channel to be returned in poll_inbound
                     self.inbound_open_tx
                         .send(substream)
@@ -231,11 +228,7 @@ impl StreamMuxer for Connection {
                     debug!("new inbound substream: {:?}", &msg.substream_id);
                 }
                 SubstreamMessageType::OpenResponse => {
-                    if self.pending_substreams.remove(&msg.substream_id) {
-                        // check if we have any pending inbound data for this substream and send it if so
-                        // self.send_pending_inbound_data_to_substream(&msg.substream_id)?;
-                        //debug!("new outbound substream: {:?}", &msg.substream_id);
-                    } else {
+                    if !self.pending_substreams.remove(&msg.substream_id) {
                         debug!(
                             "SubstreamMessageType::OpenResponse no substream pending for ID: {:?}",
                             &msg.substream_id
