@@ -7,7 +7,7 @@ macro_rules! new_nym_client {
     ($nym_id:ident, $uri:ident) => {
         let docker_client = clients::Cli::default();
         let nym_ready_message = WaitFor::message_on_stderr("Client startup finished!");
-        let nym_image = GenericImage::new("nym", "latest")
+        let nym_image = GenericImage::new("chainsafe/nym", "1.1.12")
             .with_env_var("NYM_ID", $nym_id)
             .with_wait_for(nym_ready_message)
             .with_exposed_port(1977);
