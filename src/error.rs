@@ -50,6 +50,8 @@ pub enum Error {
     InvalidRecipientPrefixByte,
     #[error("failed to decode TransportMessage; too short")]
     TransportMessageBytesTooShort,
+    #[error("failed to decode TransportMessage; invalid nonce")]
+    InvalidNonce,
     #[error("invalid substream ID")]
     InvalidSubstreamMessageBytes,
     #[error("invalid substream message type byte")]
@@ -72,6 +74,6 @@ pub enum Error {
     ConnectionSendError,
     #[error("failed to send initial TransportEvent::NewAddress")]
     SendErrorTransportEvent,
-    #[error("dial address timed out")]
+    #[error("dial timed out")]
     DialTimeout(#[from] tokio::time::error::Elapsed),
 }
