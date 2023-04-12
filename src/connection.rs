@@ -428,7 +428,7 @@ mod test {
             connection_id.clone(),
             &mut recipient_mixnet_inbound_rx,
             &recipient_inbound_tx,
-            1,
+            0,
         )
         .await;
         poll_fn(|cx| Pin::new(&mut recipient_connection).as_mut().poll(cx)).now_or_never();
@@ -448,7 +448,7 @@ mod test {
             connection_id.clone(),
             &mut sender_mixnet_inbound_rx,
             &sender_inbound_tx,
-            1,
+            0,
         )
         .await;
 
@@ -466,7 +466,7 @@ mod test {
             connection_id.clone(),
             &mut recipient_mixnet_inbound_rx,
             &recipient_inbound_tx,
-            2,
+            1,
         )
         .await;
 
@@ -488,7 +488,7 @@ mod test {
             connection_id.clone(),
             &mut recipient_mixnet_inbound_rx,
             &recipient_inbound_tx,
-            3,
+            2,
         )
         .await;
     }

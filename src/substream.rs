@@ -351,7 +351,7 @@ mod test {
                         message_type: msg,
                     },
             }) => {
-                assert_eq!(nonce, 1);
+                assert_eq!(nonce, 0);
                 match msg {
                     crate::message::SubstreamMessageType::Data(data) => {
                         assert_eq!(data, MSG_INNER);

@@ -128,9 +128,6 @@ impl NymTransport {
 
         match self.message_queues.get_mut(id) {
             Some(queue) => {
-                // update expected nonce
-                queue.set_connection_message_received();
-
                 // push pending inbound some messages in this case
                 while let Some(msg) = queue.pop() {
                     debug!(
@@ -146,8 +143,6 @@ impl NymTransport {
                 // no queue exists for this connection, create one
                 let queue = MessageQueue::new();
                 self.message_queues.insert(id.clone(), queue);
-                let queue = self.message_queues.get_mut(id).unwrap();
-                queue.set_connection_message_received();
             }
         };
 
