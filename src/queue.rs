@@ -116,16 +116,16 @@ mod test {
         let msg2 = TransportMessage::new(1, test_substream_message.clone(), connection_id.clone());
         let msg3 = TransportMessage::new(2, test_substream_message.clone(), connection_id.clone());
 
-        assert_eq!(queue.try_push(msg1.clone()), Some(msg1.clone()));
+        assert_eq!(queue.try_push(msg1.clone()), Some(msg1));
         assert_eq!(queue.try_push(msg3.clone()), None);
-        assert_eq!(queue.try_push(msg2.clone()), Some(msg2.clone()));
+        assert_eq!(queue.try_push(msg2.clone()), Some(msg2));
 
-        assert_eq!(queue.pop(), Some(msg3.clone()));
+        assert_eq!(queue.pop(), Some(msg3));
 
         assert_eq!(queue.pop(), None);
 
         let msg4 = TransportMessage::new(3, test_substream_message.clone(), connection_id.clone());
-        assert_eq!(queue.try_push(msg4.clone()), Some(msg4.clone()));
+        assert_eq!(queue.try_push(msg4.clone()), Some(msg4));
 
         assert_eq!(queue.pop(), None);
         assert_eq!(queue.pop(), None);
