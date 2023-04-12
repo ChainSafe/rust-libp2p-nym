@@ -19,4 +19,5 @@ pub fn create_nym_client<'a>(
     let nym_port = nym_container.get_host_port_ipv4(1977);
     let nym_uri = format!("ws://0.0.0.0:{nym_port}");
     (nym_container, nym_uri)
+
 }
