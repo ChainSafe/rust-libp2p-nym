@@ -535,9 +535,7 @@ mod test {
         transport::{Transport, TransportEvent},
         Multiaddr, StreamMuxer,
     };
-    use std::pin::Pin;
-    use std::str::FromStr;
-    use std::sync::atomic::Ordering;
+    use std::{pin::Pin, str::FromStr, sync::atomic::Ordering};
     use testcontainers::clients;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
     use tracing::info;
