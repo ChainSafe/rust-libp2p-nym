@@ -388,7 +388,7 @@ impl Transport for NymTransport {
 
     fn listen_on(&mut self, _: Multiaddr) -> Result<ListenerId, TransportError<Self::Error>> {
         // we should only allow listening on the multiaddress containing our Nym address
-        Err(TransportError::Other(Error::Unimplemented))
+        Ok(self.listener_id)
     }
 
     fn remove_listener(&mut self, id: ListenerId) -> bool {
@@ -450,12 +450,12 @@ impl Transport for NymTransport {
         .boxed())
     }
 
-    // dial_as_listener is unsupported.
+    // dial_as_listener currently just calls self.dial().
     fn dial_as_listener(
         &mut self,
-        _addr: Multiaddr,
+        addr: Multiaddr,
     ) -> Result<Self::Dial, TransportError<Self::Error>> {
-        Err(TransportError::Other(Error::Unimplemented))
+        self.dial(addr)
     }
 
     fn poll(
