@@ -34,7 +34,7 @@ pub struct Connection {
     pub(crate) inbound_rx: UnboundedReceiver<SubstreamMessage>,
 
     /// substream ID -> outbound pending substream exists
-    /// the key is deleted when the response is received, or the request times out (TODO)
+    /// the key is deleted when the response is received, or the request times out
     pending_substreams: HashSet<SubstreamId>,
 
     /// substream ID -> substream's inbound_tx channel

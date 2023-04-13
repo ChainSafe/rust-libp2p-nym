@@ -74,4 +74,6 @@ pub enum Error {
     ConnectionSendError,
     #[error("failed to send initial TransportEvent::NewAddress")]
     SendErrorTransportEvent,
+    #[error("dial timed out")]
+    DialTimeout(#[from] tokio::time::error::Elapsed),
 }
