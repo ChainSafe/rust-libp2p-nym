@@ -12,9 +12,12 @@ use std::{
     str::FromStr,
     task::{Context, Poll, Waker},
 };
-use tokio::sync::{
-    mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
-    oneshot,
+use tokio::{
+    sync::{
+        mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+        oneshot,
+    },
+    time::{timeout, Duration},
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::debug;
@@ -27,6 +30,7 @@ use crate::message::{
 };
 use crate::mixnet::initialize_mixnet;
 use crate::queue::MessageQueue;
+use crate::DEFAULT_HANDSHAKE_TIMEOUT_SECS;
 
 /// InboundTransportEvent represents an inbound event from the mixnet.
 pub enum InboundTransportEvent {
@@ -68,17 +72,37 @@ pub struct NymTransport {
     poll_tx: UnboundedSender<TransportEvent<Upgrade, Error>>,
 
     waker: Option<Waker>,
+
+    /// Timeout for the [`Upgrade`] future.
+    handshake_timeout: Duration,
 }
 
 impl NymTransport {
+    /// New transport.
     pub async fn new(uri: &String, keypair: Keypair) -> Result<Self, Error> {
-        Self::new_maybe_with_notify_inbound(uri, keypair, None).await
+        Self::new_maybe_with_notify_inbound(uri, keypair, None, None).await
+    }
+
+    /// New transport with a timeout.
+    pub async fn new_with_timeout(
+        uri: &String,
+        keypair: Keypair,
+        timeout: Duration,
+    ) -> Result<Self, Error> {
+        Self::new_maybe_with_notify_inbound(uri, keypair, None, Some(timeout)).await
+    }
+
+    /// Add timeout to transport and return self.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.handshake_timeout = timeout;
+        self
     }
 
     async fn new_maybe_with_notify_inbound(
         uri: &String,
         keypair: Keypair,
         notify_inbound_tx: Option<UnboundedSender<()>>,
+        timeout: Option<Duration>,
     ) -> Result<Self, Error> {
         let (self_address, inbound_rx, outbound_tx) =
             initialize_mixnet(uri, notify_inbound_tx).await?;
@@ -95,6 +119,8 @@ impl NymTransport {
             .map_err(|_| Error::SendErrorTransportEvent)?;
 
         let inbound_stream = UnboundedReceiverStream::new(inbound_rx);
+        let handshake_timeout =
+            timeout.unwrap_or_else(|| Duration::from_secs(DEFAULT_HANDSHAKE_TIMEOUT_SECS));
 
         Ok(Self {
             self_address,
@@ -109,6 +135,7 @@ impl NymTransport {
             poll_rx,
             poll_tx,
             waker: None,
+            handshake_timeout,
         })
     }
 
@@ -403,6 +430,7 @@ impl Transport for NymTransport {
         let outbound_tx = self.outbound_tx.clone();
 
         let mut waker = self.waker.clone();
+        let handshake_timeout = self.handshake_timeout;
         Ok(async move {
             outbound_tx
                 .send(OutboundMessage {
@@ -416,9 +444,7 @@ impl Transport for NymTransport {
                 waker.wake();
             };
 
-            // TODO: response timeout
-            let conn = connection_rx.await.map_err(Error::OneshotRecvError)?;
-            debug!("received connection response: id {:?}", conn.id);
+            let conn = timeout(handshake_timeout, connection_rx).await??;
             Ok((conn.peer_id, conn))
         }
         .boxed())
@@ -507,10 +533,9 @@ mod test {
     use libp2p::core::{
         identity::Keypair,
         transport::{Transport, TransportEvent},
-        StreamMuxer,
+        Multiaddr, StreamMuxer,
     };
-    use std::pin::Pin;
-    use std::sync::atomic::Ordering;
+    use std::{pin::Pin, str::FromStr, sync::atomic::Ordering};
     use testcontainers::clients;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
     use tracing::info;
@@ -539,7 +564,7 @@ mod test {
             notify_inbound_tx: UnboundedSender<()>,
         ) -> Result<Self, Error> {
             let local_key = Keypair::generate_ed25519();
-            Self::new_maybe_with_notify_inbound(uri, local_key, Some(notify_inbound_tx)).await
+            Self::new_maybe_with_notify_inbound(uri, local_key, Some(notify_inbound_tx), None).await
         }
     }
 
@@ -849,5 +874,31 @@ mod test {
         let n = recipient_substream.read(&mut buf).await.unwrap();
         assert_eq!(n, data.len());
         assert_eq!(buf, data[..]);
+    }
+
+    #[tokio::test]
+    async fn test_transport_timeout() {
+        let docker_client = clients::Cli::default();
+        let nym_id = "test_transport_timeout";
+        let (_container, dialer_uri) = create_nym_client(&docker_client, nym_id);
+        let (dialer_notify_inbound_tx, _) = unbounded_channel();
+        let mut dialer_transport =
+            NymTransport::new_with_notify_inbound(&dialer_uri, dialer_notify_inbound_tx)
+                .await
+                .unwrap()
+                .with_timeout(std::time::Duration::from_millis(100));
+
+        // mock a transport that will never resolve the connection.
+        let empty_addr = Multiaddr::from_str(
+            "/nym/Hmer6Ndt3PV13YW53HM8ri4NvqqtfDQUQBhzvKqb1dag.2g478dyxtrQXGWc1Mk2VEqdPcWXpz7EhAcjhdAJtVZdA@AnnYnEtBjB2a5sHmeRCnBq43qxyHDf95Bqd7cwQyKNLR"
+        )
+        .expect("unable to parse multiaddress");
+
+        let dial = dialer_transport.dial(empty_addr).unwrap();
+        assert!(dial
+            .await
+            .expect_err("should have timed out")
+            .to_string()
+            .contains("dial timed out"));
     }
 }
