@@ -39,12 +39,8 @@ impl MessageQueue {
     }
 
     pub(crate) fn print_nonces(&self) {
-        let mut nonces = "".to_string();
-        self.queue.iter().for_each(|msg| {
-            nonces += &msg.nonce.to_string();
-            nonces += ", ";
-        });
-        debug!("MessageQueue: [{:?}]", nonces);
+        let nonces = self.queue.iter().map(|msg| msg.nonce).collect::<Vec<_>>();
+        debug!("MessageQueue: {:?}", nonces);
     }
 
     /// sets the next expected nonce to 1, indicating that we've received
