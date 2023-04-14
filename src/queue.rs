@@ -45,7 +45,7 @@ impl MessageQueue {
             panic!("connection message received twice");
         }
 
-        self.next_expected_nonce += 1;
+        self.next_expected_nonce = self.next_expected_nonce.wrapping_add(1);
     }
 
     /// tries to push a message into the queue.
@@ -54,7 +54,7 @@ impl MessageQueue {
     /// in that case, the internal queue's next expected nonce is incremented.
     pub(crate) fn try_push(&mut self, msg: TransportMessage) -> Option<TransportMessage> {
         if msg.nonce == self.next_expected_nonce {
-            self.next_expected_nonce += 1;
+            self.next_expected_nonce = self.next_expected_nonce.wrapping_add(1);
             Some(msg)
         } else {
             if msg.nonce < self.next_expected_nonce {
@@ -81,7 +81,7 @@ impl MessageQueue {
         };
 
         if head.nonce == self.next_expected_nonce {
-            self.next_expected_nonce += 1;
+            self.next_expected_nonce = self.next_expected_nonce.wrapping_add(1);
             Some(self.queue.pop_first().unwrap())
         } else {
             None
