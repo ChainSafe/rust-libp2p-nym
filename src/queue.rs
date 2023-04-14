@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::BTreeSet;
 use tracing::{debug, warn};
 
 use crate::message::TransportMessage;
@@ -22,29 +22,20 @@ pub(crate) struct MessageQueue {
     /// the actual queue of messages, ordered by nonce.
     /// the head of the queue's nonce is always greater
     /// than the next expected nonce.
-    queue: VecDeque<TransportMessage>,
-
-    /// tracks the nonces that exist in the queue.
-    /// used to check for duplicate nonces on push.
-    nonce_set: HashSet<u64>,
+    queue: BTreeSet<TransportMessage>,
 }
 
 impl MessageQueue {
     pub(crate) fn new() -> Self {
         MessageQueue {
             next_expected_nonce: 0,
-            queue: VecDeque::new(),
-            nonce_set: HashSet::new(),
+            queue: BTreeSet::new(),
         }
     }
 
     pub(crate) fn print_nonces(&self) {
-        let mut nonces = "".to_string();
-        self.queue.iter().for_each(|msg| {
-            nonces += &msg.nonce.to_string();
-            nonces += ", ";
-        });
-        debug!("MessageQueue: [{:?}]", nonces);
+        let nonces = self.queue.iter().map(|msg| msg.nonce).collect::<Vec<_>>();
+        debug!("MessageQueue: {:?}", nonces);
     }
 
     /// sets the next expected nonce to 1, indicating that we've received
@@ -54,7 +45,7 @@ impl MessageQueue {
             panic!("connection message received twice");
         }
 
-        self.next_expected_nonce += 1;
+        self.next_expected_nonce = self.next_expected_nonce.wrapping_add(1);
     }
 
     /// tries to push a message into the queue.
@@ -63,7 +54,7 @@ impl MessageQueue {
     /// in that case, the internal queue's next expected nonce is incremented.
     pub(crate) fn try_push(&mut self, msg: TransportMessage) -> Option<TransportMessage> {
         if msg.nonce == self.next_expected_nonce {
-            self.next_expected_nonce += 1;
+            self.next_expected_nonce = self.next_expected_nonce.wrapping_add(1);
             Some(msg)
         } else {
             if msg.nonce < self.next_expected_nonce {
@@ -73,29 +64,25 @@ impl MessageQueue {
                 return None;
             }
 
-            if self.nonce_set.contains(&msg.nonce) {
+            if !self.queue.insert(msg) {
                 // this shouldn't happen normally, only if the other node
                 // is not following the protocol
                 warn!("received a message with a duplicate nonce");
                 return None;
             }
 
-            self.nonce_set.insert(msg.nonce);
-            self.queue.push_back(msg);
-            self.queue.make_contiguous().sort();
             None
         }
     }
 
     pub(crate) fn pop(&mut self) -> Option<TransportMessage> {
-        let Some(head) = self.queue.front() else {
+        let Some(head) = self.queue.first() else {
             return None;
         };
 
         if head.nonce == self.next_expected_nonce {
-            self.next_expected_nonce += 1;
-            self.nonce_set.remove(&head.nonce);
-            Some(self.queue.pop_front().unwrap())
+            self.next_expected_nonce = self.next_expected_nonce.wrapping_add(1);
+            Some(self.queue.pop_first().unwrap())
         } else {
             None
         }

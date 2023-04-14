@@ -9,6 +9,9 @@ const RECIPIENT_LENGTH: usize = Recipient::LEN;
 const CONNECTION_ID_LENGTH: usize = 32;
 const SUBSTREAM_ID_LENGTH: usize = 32;
 
+const NONCE_BYTES_LEN: usize = 8; // length of u64
+const MIN_CONNECTION_MESSAGE_LEN: usize = CONNECTION_ID_LENGTH + NONCE_BYTES_LEN;
+
 /// ConnectionId is a unique, randomly-generated per-connection ID that's used to
 /// identify which connection a message belongs to.
 #[derive(Clone, Default, Eq, Hash, PartialEq)]
@@ -178,18 +181,18 @@ impl TransportMessage {
     }
 
     fn try_from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.len() < CONNECTION_ID_LENGTH + 9 {
+        if bytes.len() < MIN_CONNECTION_MESSAGE_LEN + 1 {
             return Err(Error::TransportMessageBytesTooShort);
         }
 
         let nonce = u64::from_be_bytes(
-            bytes[0..8]
+            bytes[0..NONCE_BYTES_LEN]
                 .to_vec()
                 .try_into()
                 .map_err(|_| Error::InvalidNonce)?,
         );
-        let id = ConnectionId::from_bytes(&bytes[8..8 + CONNECTION_ID_LENGTH]);
-        let message = SubstreamMessage::try_from_bytes(&bytes[8 + CONNECTION_ID_LENGTH..])?;
+        let id = ConnectionId::from_bytes(&bytes[NONCE_BYTES_LEN..MIN_CONNECTION_MESSAGE_LEN]);
+        let message = SubstreamMessage::try_from_bytes(&bytes[MIN_CONNECTION_MESSAGE_LEN..])?;
         Ok(TransportMessage { nonce, message, id })
     }
 }
