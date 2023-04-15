@@ -136,8 +136,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         info!("Dialed {addr}")
     }
 
-    println!("swarm has been built");
-
     // Read full lines from stdin
     let mut stdin = codec::FramedRead::new(io::stdin(), codec::LinesCodec::new()).fuse();
 
@@ -154,7 +152,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
             },
             event = swarm.select_next_some() => {
-                println!("The event is: {:?}", event);
                 match event {
                     SwarmEvent::Behaviour(BehaviourEvent::Gossipsub(gossipsub::Event::Message {
                         propagation_source: peer_id,
@@ -167,7 +164,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     SwarmEvent::NewListenAddr { address, .. } => {
                         println!("Local node is listening on {address}");
                     }
-                    other => {println!("other stuff: {:?}", other)}
+                    other => {println!("other event: {:?}", other)}
                 }
             }
         }
