@@ -1,6 +1,48 @@
-# rust-libp2p-nym [wip]
+# rust-libp2p-nym
 
 This repo contains an implementation of a libp2p transport using the Nym mixnet.
+
+## Requirements
+
+- Rust 1.68.2
+
+## Usage
+
+To instantiate a libp2p swarm using the transport:
+
+```rust
+use libp2p::core::{muxing::StreamMuxerBox, transport::Transport};
+use libp2p::swarm::{keep_alive::Behaviour, SwarmBuilder};
+use libp2p::{identity, PeerId};
+use rust_libp2p_nym::transport::NymTransport;
+use rust_libp2p_nym::test_utils::create_nym_client;
+use std::error::Error;
+use testcontainers::clients;
+use tracing::{info};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let local_key = identity::Keypair::generate_ed25519();
+    let local_peer_id = PeerId::from(local_key.public());
+    info!("Local peer id: {local_peer_id:?}");
+
+    let nym_id = rand::random::<u64>().to_string();
+    let docker_client = clients::Cli::default();
+    let (_nym_container, dialer_uri) = create_nym_client(&docker_client, &nym_id);
+    let transport = NymTransport::new(&dialer_uri, local_key.clone()).await?;
+    let _swarm = SwarmBuilder::with_tokio_executor(
+        transport
+            .map(|a, _| (a.0, StreamMuxerBox::new(a.1)))
+            .boxed(),
+        Behaviour::default(),
+        local_peer_id,
+    )
+    .build();
+    Ok(())
+}
+```
+
+See `examples/ping.rs` for a full usage example.
 
 ## Tests
 
@@ -23,6 +65,28 @@ DOCKER_BUILD=1 cargo test
 * The Docker image is a *local* image and we are not pushing this
   anywhere. The tag is reflective of the version of the binaries that
   we are downloading from github releases for the nym client
+
+### Writing New Tests
+
+In order to abstract away the `nym-client` instantiation, we rely on the
+[`testcontainers`
+crate](https://docs.rs/testcontainers/latest/testcontainers/index.html) that
+launches the service for us. Since there are no publicly maintained versions of
+this, we use our own Dockerfile.
+
+In order to create a single service, developers can use the following code
+snippet.
+
+```rust
+let dialer_uri: String = Default::default();
+rust_libp2p_nym::new_nym_client!(nym_id, dialer_uri);
+```
+
+One can create as many of these as needed, limited only by the server resources.
+
+For more usage patterns, look at `src/transport.rs`. Note that if the code terminates
+in a non-clean way, you might have to kill the running docker containers
+manually using `docker rm -f $ID".
 
 ## Ping example
 
@@ -60,25 +124,3 @@ RUST_LOG=ping=debug cargo run --examples ping --feature vanilla
 ```bash
 RUST_LOG=ping=debug cargo run --examples ping --feature vanilla -- "/ip4/127.0.0.1/tcp/$PORT"
 ```
-
-### Writing New Tests
-
-In order to abstract away the `nym-client` instantiation, we rely on the
-[`testcontainers`
-crate](https://docs.rs/testcontainers/latest/testcontainers/index.html) that
-launches the service for us. Since there are no publicly maintained versions of
-this, we use our own Dockerfile.
-
-In order to create a single service, developers can use the following code
-snippet.
-
-```rust
-let dialer_uri: String = Default::default();
-rust_libp2p_nym::new_nym_client!(nym_id, dialer_uri);
-```
-
-One can create as many of these as needed, limited only by the server resources.
-
-For more usage patterns, look at `src/transport.rs`. Note that if the code terminates
-in a non-clean way, you might have to kill the running docker containers
-manually using `docker rm -f $ID".
