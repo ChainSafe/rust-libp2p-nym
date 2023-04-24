@@ -44,6 +44,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 See `examples/ping.rs` for a full usage example.
 
+Alternatively, you can connect to a known Nym client directly instead of using a local Dockerized client by passing in the client's websockets endpoint to `NymTransport::new()`, which is `ws://127.0.0.1:1977` by default.
+
 ## Tests
 
 Install `protoc`. On Ubuntu/Debian, run: `sudo apt-get install
