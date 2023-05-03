@@ -386,8 +386,11 @@ impl Transport for NymTransport {
     type ListenerUpgrade = Upgrade;
     type Dial = Pin<Box<dyn Future<Output = Result<Self::Output, Self::Error>> + Send>>;
 
-    fn listen_on(&mut self, _: Multiaddr) -> Result<ListenerId, TransportError<Self::Error>> {
-        // we should only allow listening on the multiaddress containing our Nym address
+    fn listen_on(&mut self, addr: Multiaddr) -> Result<ListenerId, TransportError<Self::Error>> {
+        if let Err(e) = multiaddress_to_nym_address(addr) {
+            return Err(TransportError::Other(e));
+        }
+
         Ok(self.listener_id)
     }
 
