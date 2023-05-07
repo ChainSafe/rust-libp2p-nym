@@ -43,7 +43,7 @@ pub enum InboundTransportEvent {
 pub struct NymTransport {
     /// our Nym address
     self_address: Recipient,
-    pub(crate) listen_addr: Multiaddr,
+    pub listen_addr: Multiaddr,
     pub(crate) listener_id: ListenerId,
 
     /// our libp2p keypair; currently not really used
@@ -514,10 +514,18 @@ fn nym_address_to_multiaddress(addr: Recipient) -> Result<Multiaddr, Error> {
 
 fn multiaddress_to_nym_address(multiaddr: Multiaddr) -> Result<Recipient, Error> {
     let mut multiaddr = multiaddr;
-    match multiaddr.pop().unwrap() {
-        Protocol::Nym(addr) => Recipient::from_str(&addr).map_err(Error::InvalidRecipientBytes),
-        _ => Err(Error::InvalidProtocolForMultiaddr),
+
+    loop {
+        if multiaddr.is_empty() {
+            break;
+        }
+
+        if let Some(Protocol::Nym(addr)) = multiaddr.pop() {
+            return Ok(Recipient::from_str(&addr).map_err(Error::InvalidRecipientBytes)?);
+        }
     }
+
+    Err(Error::InvalidProtocolForMultiaddr)
 }
 
 #[cfg(test)]
@@ -903,5 +911,16 @@ mod test {
             .expect_err("should have timed out")
             .to_string()
             .contains("dial timed out"));
+    }
+
+    #[test]
+    fn nym_chain_p2p_tp_nym() {
+        let mut addr = Multiaddr::from_str(
+            "/nym/56ASbccbzkyDeEq76fxzru1UcSMNwiV7x37Jm6MNFUfZ.6r42QaCBZQk9vEEHVKP4HDGsfQADL4ZcuyRAEENCMJcJ@BTZNB3bkkEePsT14GN8ofVtM1SJae4YLWjpBerrKYfr/p2p/16Uiu2HAkyQT2dEi1rAmgR6ZtoJPGsKLveh29YtqR42bG7tTLA6BG"
+        ).unwrap();
+
+        // println!("{}", addr);
+
+        assert!(super::multiaddress_to_nym_address(addr).is_ok())
     }
 }
