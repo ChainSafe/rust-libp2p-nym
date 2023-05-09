@@ -154,7 +154,9 @@ impl Connection {
 
         // notify substream that it's closed
         let close_tx = self.substream_close_txs.remove(&substream_id);
-        close_tx.unwrap().send(()).unwrap();
+        if let Some(tx) = close_tx {
+            tx.send(()).map_err(|_| Error::ConnectionSendError)?;
+        }
 
         // notify poll_close that the substream is closed
         self.close_tx

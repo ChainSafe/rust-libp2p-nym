@@ -433,7 +433,7 @@ impl Transport for NymTransport {
         let outbound_tx = self.outbound_tx.clone();
 
         let mut waker = self.waker.clone();
-        let handshake_timeout = self.handshake_timeout;
+        // let handshake_timeout = self.handshake_timeout;
         Ok(async move {
             outbound_tx
                 .send(OutboundMessage {
@@ -447,7 +447,9 @@ impl Transport for NymTransport {
                 waker.wake();
             };
 
-            let conn = timeout(handshake_timeout, connection_rx).await??;
+            // let conn = timeout(handshake_timeout, connection_rx).await??;
+            // Ok((conn.peer_id, conn))
+            let conn = connection_rx.await?;
             Ok((conn.peer_id, conn))
         }
         .boxed())
