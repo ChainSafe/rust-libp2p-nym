@@ -6,6 +6,7 @@ pub(crate) mod queue;
 pub mod substream;
 pub mod test_utils;
 pub mod transport;
+pub mod testing;
 
 /// The deafult timeout secs for [`transport::Upgrade`] future.
 const DEFAULT_HANDSHAKE_TIMEOUT_SECS: u64 = 60;

@@ -171,6 +171,7 @@ impl NymTransport {
             }
             None => {
                 // no queue exists for this connection, create one
+                debug!("no queue exists for this connection {:?}, create one", id);
                 let queue = MessageQueue::new();
                 self.message_queues.insert(id.clone(), queue);
                 let queue = self.message_queues.get_mut(id).unwrap();
@@ -281,6 +282,17 @@ impl NymTransport {
             "sending original message with nonce {} for connection",
             nonce
         );
+
+        // There are two cases where the inbound channel can be closed:
+        //
+        // 1. The connection has been closed, in which case we should not send the message
+        // 2. The connection has not been closed, but the receiver has dropped the channel
+        if inbound_tx.is_closed() {
+            return Err(Error::InboundSendError(
+                "inbound channel closed".to_string(),
+            ));
+        }
+
         inbound_tx
             .send(msg.message.clone())
             .map_err(|e| Error::InboundSendError(e.to_string()))?;
@@ -337,6 +349,7 @@ impl NymTransport {
                         connection_tx
                             .send((inner.peer_id, conn))
                             .map_err(|_| Error::ConnectionSendError)?;
+                        debug!("inbound connection sent");
                         Ok(InboundTransportEvent::ConnectionRequest(upgrade))
                     }
                     Err(e) => Err(e),
