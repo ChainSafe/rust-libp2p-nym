@@ -13,7 +13,7 @@ use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     oneshot,
 };
-use tracing::debug;
+use tracing::{debug, error, warn};
 
 use crate::error::Error;
 use crate::message::{
@@ -155,7 +155,10 @@ impl Connection {
         // notify substream that it's closed
         let close_tx = self.substream_close_txs.remove(&substream_id);
         if let Some(tx) = close_tx {
-            tx.send(()).map_err(|_| Error::ConnectionSendError)?;
+            tx.send(()).map_err(|e| {
+                error!("handle close failed {e:?}, the receiver dropped");
+                Error::ConnectionSendError
+            })?;
         }
 
         // notify poll_close that the substream is closed
@@ -256,6 +259,12 @@ impl StreamMuxer for Connection {
 
         self.waker = Some(cx.waker().clone());
         Poll::Pending
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        warn!("Connection dropped: {:?}", self.id);
     }
 }
 

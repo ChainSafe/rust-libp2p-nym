@@ -20,7 +20,7 @@ use tokio::{
     time::{timeout, Duration},
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::connection::{Connection, PendingConnection};
 use crate::error::Error;
@@ -200,11 +200,10 @@ impl NymTransport {
 
             self.connections.insert(msg.id.clone(), conn_tx);
             self.handle_message_queue_on_connection_initiation(&msg.id)?;
-
-            pending_conn
-                .connection_tx
-                .send(conn)
-                .map_err(|_| Error::ConnectionSendError)?;
+            pending_conn.connection_tx.send(conn).map_err(|e| {
+                error!("handle inbound failed {e:?}");
+                Error::ConnectionSendError
+            })?;
 
             if let Some(waker) = self.waker.take() {
                 waker.wake();
@@ -346,9 +345,11 @@ impl NymTransport {
                         let (connection_tx, connection_rx) =
                             oneshot::channel::<(PeerId, Connection)>();
                         let upgrade = Upgrade::new(connection_rx);
-                        connection_tx
-                            .send((inner.peer_id, conn))
-                            .map_err(|_| Error::ConnectionSendError)?;
+
+                        connection_tx.send((inner.peer_id, conn)).map_err(|e| {
+                            error!("handle inbound failed {e:?}");
+                            Error::ConnectionSendError
+                        })?;
                         debug!("inbound connection sent");
                         Ok(InboundTransportEvent::ConnectionRequest(upgrade))
                     }

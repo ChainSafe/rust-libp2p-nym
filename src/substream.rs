@@ -16,7 +16,7 @@ use tokio::sync::{
     mpsc::{UnboundedReceiver, UnboundedSender},
     oneshot::Receiver,
 };
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::message::{
     ConnectionId, Message, OutboundMessage, SubstreamId, SubstreamMessage, TransportMessage,
@@ -219,6 +219,13 @@ impl AsyncWrite for Substream {
             })?;
 
         Poll::Ready(Ok(()))
+    }
+}
+
+impl Drop for Substream {
+    fn drop(&mut self) {
+        let cid = &self.connection_id;
+        warn!("substream dropped {cid:?}");
     }
 }
 

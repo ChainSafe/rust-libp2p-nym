@@ -13,10 +13,9 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("connections=debug,rust_libp2p_nym=debug")),
-        )
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            EnvFilter::new("connections=info,debug,rust_libp2p_nym=debug,libp2p_swarm=debug")
+        }))
         .init();
 
     let node_count = 2;
@@ -91,7 +90,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         local_addr,
                         send_back_addr,
                     } => {
-                        debug!("Incoming connection local_addr {local_addr}, from {send_back_addr}");
+                        info!("Incoming connection local_addr {local_addr}, from {send_back_addr}");
                     }
                     SwarmEvent::IncomingConnectionError {
                         local_addr,
