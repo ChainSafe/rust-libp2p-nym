@@ -1,8 +1,9 @@
 use libp2p::futures::{future, StreamExt};
 use libp2p::gossipsub::{
     subscription_filter::AllowAllSubscriptionFilter, Behaviour as BaseGossipsub, ConfigBuilder,
-    IdentityTransform, MessageAuthenticity, ValidationMode,
+    IdentTopic, IdentityTransform, MessageAuthenticity, ValidationMode,
 };
+use libp2p::ping;
 use libp2p::swarm::{keep_alive, NetworkBehaviour, Swarm, SwarmEvent};
 use libp2p::{identity, Multiaddr, PeerId};
 
@@ -19,7 +20,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             EnvFilter::new(
-                "gossipsub=debug,rust_libp2p_nym=debug,libp2p_swarm=debug,nym_client=debug,libp2p_gossipsub=debug",
+                "gossipsub=debug,rust_libp2p_nym=debug,libp2p_swarm=trace,nym_client=debug,libp2p_gossipsub=trace",
             )
         }))
         .init();
@@ -71,6 +72,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     SwarmEvent::NewListenAddr { address, .. } => info!("Listening on {address:?}"),
                     SwarmEvent::Behaviour(event) => {
                         info!("{event:?}");
+                        match event {
+                            BehaviourEvent::Ping(_) => {
+                                swarm
+                                    .behaviour_mut()
+                                    .gossipsub
+                                    .subscribe(&IdentTopic::new("test"))
+                                    .expect("failed to subscribe to topic");
+                            }
+                            _ => {}
+                        }
+
                     }
                     SwarmEvent::IncomingConnection {
                         local_addr,
@@ -118,9 +130,10 @@ async fn build_transport(port: u16) -> (Swarm<Behaviour>, Multiaddr) {
         .expect("build gossipsub config failed");
 
     let behaviour = Behaviour {
-        keep_alive: Default::default(),
         gossipsub: Gossipsub::new(MessageAuthenticity::Anonymous, config)
             .expect("build gossipsub failed"),
+        keep_alive: Default::default(),
+        ping: Default::default(),
     };
 
     let swarm = SwarmBuilder::with_tokio_executor(
@@ -142,5 +155,6 @@ async fn build_transport(port: u16) -> (Swarm<Behaviour>, Multiaddr) {
 #[derive(NetworkBehaviour)]
 struct Behaviour {
     keep_alive: keep_alive::Behaviour,
+    ping: ping::Behaviour,
     gossipsub: Gossipsub,
 }

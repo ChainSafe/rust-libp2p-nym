@@ -28,4 +28,5 @@ vanilla = []
 
 [patch.crates-io] 
 libp2p = { git = "https://github.com/ChainSafe/rust-libp2p.git", rev = "e3440d25681df380c9f0f8cfdcfd5ecc0a4f2fb6" }
+# libp2p = { path = "../rust-libp2p" }
 multiaddr = { git = "https://github.com/ChainSafe/rust-multiaddr.git", rev = "2d21365f880622adf1c8e594b72e671dbac9dd64" }
