@@ -3,7 +3,7 @@ use libp2p::gossipsub::{
     subscription_filter::AllowAllSubscriptionFilter, Behaviour as BaseGossipsub, ConfigBuilder,
     IdentityTransform, MessageAuthenticity, ValidationMode,
 };
-use libp2p::swarm::{NetworkBehaviour, Swarm, SwarmEvent};
+use libp2p::swarm::{keep_alive, NetworkBehaviour, Swarm, SwarmEvent};
 use libp2p::{identity, Multiaddr, PeerId};
 
 use rust_libp2p_nym::testing::NymClient;
@@ -118,6 +118,7 @@ async fn build_transport(port: u16) -> (Swarm<Behaviour>, Multiaddr) {
         .expect("build gossipsub config failed");
 
     let behaviour = Behaviour {
+        keep_alive: Default::default(),
         gossipsub: Gossipsub::new(MessageAuthenticity::Anonymous, config)
             .expect("build gossipsub failed"),
     };
@@ -140,5 +141,6 @@ async fn build_transport(port: u16) -> (Swarm<Behaviour>, Multiaddr) {
 /// pings can be observed.
 #[derive(NetworkBehaviour)]
 struct Behaviour {
+    keep_alive: keep_alive::Behaviour,
     gossipsub: Gossipsub,
 }
