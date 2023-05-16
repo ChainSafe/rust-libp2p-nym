@@ -192,6 +192,9 @@ impl AsyncWrite for Substream {
     }
 
     fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), IoError>> {
+        let id = self.substream_id.clone();
+        let recipient = self.remote_recipient.clone();
+        debug!("poll close substream: {id:?}, recipient: {recipient}");
         let nonce = self.message_nonce.fetch_add(1, Ordering::SeqCst);
 
         let mut closed = self.closed.lock();

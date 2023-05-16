@@ -362,7 +362,8 @@ impl NymTransport {
                     .map(|_| InboundTransportEvent::ConnectionResponse)
             }
             Message::TransportMessage(msg) => {
-                debug!("got inbound TransportMessage: {:?}", msg);
+                let addr = self.self_address.clone();
+                debug!("{addr} got inbound TransportMessage: {:?}", msg);
                 self.handle_transport_message(msg)
                     .map(|_| InboundTransportEvent::TransportMessage)
             }
@@ -447,7 +448,7 @@ impl Transport for NymTransport {
         let outbound_tx = self.outbound_tx.clone();
 
         let mut waker = self.waker.clone();
-        // let handshake_timeout = self.handshake_timeout;
+        let handshake_timeout = self.handshake_timeout;
         Ok(async move {
             outbound_tx
                 .send(OutboundMessage {
@@ -461,9 +462,7 @@ impl Transport for NymTransport {
                 waker.wake();
             };
 
-            // let conn = timeout(handshake_timeout, connection_rx).await??;
-            // Ok((conn.peer_id, conn))
-            let conn = connection_rx.await?;
+            let conn = timeout(handshake_timeout, connection_rx).await??;
             Ok((conn.peer_id, conn))
         }
         .boxed())

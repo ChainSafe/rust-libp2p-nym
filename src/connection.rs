@@ -156,7 +156,8 @@ impl Connection {
         let close_tx = self.substream_close_txs.remove(&substream_id);
         if let Some(tx) = close_tx {
             tx.send(()).map_err(|e| {
-                error!("handle close failed {e:?}, the receiver dropped");
+                let peer_id = self.peer_id.clone();
+                error!("handle close failed {e:?}, the receiver dropped, peerid: {peer_id}");
                 Error::ConnectionSendError
             })?;
         }
@@ -252,7 +253,10 @@ impl StreamMuxer for Connection {
 
                     // NOTE: this ignores channel closed errors, which is fine because the substream
                     // might have been closed/dropped
-                    inbound_tx.send(data).ok();
+                    if let Err(e) = inbound_tx.send(data) {
+                        let sid = msg.substream_id.clone();
+                        error!("failed to send data to substream: {sid:?}, error: {:?}", e);
+                    }
                 }
             }
         }
