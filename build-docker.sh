@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Script to build the docker image.
 # NOTE: `1.1.12` is the nym version we are using in the file explicitly.
 # So this version reflects this. Ideally, this could be replaced by an
