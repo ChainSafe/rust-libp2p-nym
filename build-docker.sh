@@ -7,7 +7,7 @@ set -euo pipefail
 IFS=$'\n\t'
 set -xf
 if [[ "$OSTYPE" == "darwin"* ]]; then
-  docker build -t 'chainsafe/nym:1.1.12' -f ./Dockerfile.nym .
+  docker build -t 'chainsafe/nym:1.1.12' -f ./Dockerfile.build-nym .
 elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
   docker build -t 'chainsafe/nym:1.1.12' -f ./Dockerfile.nym .
 else
