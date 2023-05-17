@@ -3,7 +3,7 @@ RUN apt-get install -y pkg-config git
 
 WORKDIR /nym
 # Build the nym binaries locally.
-RUN git clone https://github.com/nymtech/nym && cd nym && git checkout release/v1.1.19
+RUN git clone https://github.com/nymtech/nym && cd nym && git checkout release/v1.1.12
 RUN cd nym && cargo build --release
 RUN mv ./nym/target/release/nym-client ./nym-client && chmod a+rx nym-client
 

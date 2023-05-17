@@ -6,4 +6,11 @@
 set -euo pipefail
 IFS=$'\n\t'
 set -xf
-docker build -t 'chainsafe/nym:1.1.12' -f ./Dockerfile.nym .
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  docker build -t 'chainsafe/nym:1.1.12' -f ./Dockerfile.nym .
+elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+  docker build -t 'chainsafe/nym:1.1.12' -f ./Dockerfile.nym .
+else
+  echo "Unknown OS: $OSTYPE" 1>&2
+  exit 1
+fi
