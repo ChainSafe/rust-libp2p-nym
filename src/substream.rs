@@ -239,7 +239,7 @@ mod test {
     async fn test_substream_poll_read_unread_data() {
         let (outbound_tx, _) = tokio::sync::mpsc::unbounded_channel();
 
-        const MSG_INNER: &[u8] = "hello".as_bytes();
+        // const MSG_INNER: &[u8] = "hello".as_bytes();
         let connection_id = ConnectionId::generate();
         let substream_id = SubstreamId::generate();
 
