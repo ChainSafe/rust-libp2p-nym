@@ -17,9 +17,9 @@ jobs:
           override: true
           components: rustfmt, clippy
     - name: Build
-      run: DOCKER_BUILD=1 cargo build --all
+      run: ./build-docker.sh && cargo build --all
     - name: Run tests
-      run: DOCKER_BUILD=1 cargo test
+      run: ./build-docker.sh && cargo test
 
 
   fmt:
@@ -27,7 +27,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v1
-      - run: rustup component add rustfmt
+      - name: Install latest nightly
+        uses: actions-rs/toolchain@v1
+        with:
+            toolchain: stable
+            override: true
+            components: rustfmt
       - uses: actions-rs/cargo@v1
         with:
           command: fmt

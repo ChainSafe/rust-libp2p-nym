@@ -52,18 +52,17 @@ Install `protoc`. On Ubuntu/Debian, run: `sudo apt-get install
 protobuf-compiler`.
 
 Ensure that docker is installed on the machine where the tests need to
-be run.
+be run. 
 
 Then, run the following as usual.
 
 ```
-DOCKER_BUILD=1 cargo test
+./build-docker.sh
 ```
+This builds the docker image for the nym service locally.
 
 ### Notes on Docker
 
-* If you've already built the docker image and want to avoid this step,
-  you can ignore the `DOCKER_BUILD` environment variable.
 * The Docker image is a *local* image and we are not pushing this
   anywhere. The tag is reflective of the version of the binaries that
   we are downloading from github releases for the nym client
